@@ -15,6 +15,10 @@
   </style>
 </head>
 <body>
+  <div style="display: flex; gap: 40px; align-items: flex-start; margin-bottom: 40px;">
+  <!-- Left: Input Variables -->
+  <div id="inputs" style="flex: 1;">
+    <h2>Input Parameters</h2>
   <h1>Deduplication Calculator</h1>
   <div class="form-group">
     <label>1. Source Data Size (TiB):</label>
@@ -53,15 +57,31 @@
     <input type="number" id="cloudDelay" value="5"/>
   </div>
   <button onclick="generateCharts()">Generate Charts</button>
+  </div>
+<div id="stats" style="flex: 1;">
+    <h2>Simulation Summary</h2>
+    <p><strong>Total Source Data:</strong> <span id="totalIngested"></span> TiB</p>
+    <p><strong>Total Stored Data:</strong> <span id="totalStored"></span> TiB</p>
+    <p><strong>Total Cloud Data:</strong> <span id="totalCloud"></span> TiB</p>
+    <p><strong>Total Deduplication Savings:</strong> <span id="finalEfficiency"></span> %</p>
+    <p><strong>Logical Deduplicated Size:</strong> <span id="logicalDeduped">-</span> TiB</p>
+    <p><strong>Required Keys (KB/32):</strong> <span id="requiredKeys">-</span></p>
+
+  </div>
+</div>
 
 <div class="chart-wrapper">
     <div class="chart-box">
       <h2>Data Storage Over Time</h2>
-      <canvas id="storageChart" height="300"></canvas>
+      <canvas id="storageChart" width="800" height="300"></canvas>
     </div>
     <div class="chart-box">
       <h2>Deduplication Efficiency Over Time</h2>
-      <canvas id="dedupeChart" height="300"></canvas>
+      <canvas id="dedupeChart" width="800" height="300"></canvas>
+    </div>
+    <div class="chart-box">
+      <h2>Required Keys Over Time</h2>
+      <canvas id="keysChart" width="800" height="300"></canvas>
     </div>
     <div class="chart-wrapper">
     <div id="storageChart" style="margin-top: 20px; font-weight: bold;"></div>
@@ -95,7 +115,7 @@
     let cloudStorage = 0;
     let cumulativeRaw = 0;
     let cumulativeStored = 0;
-
+    let requiredKeysSeries = [];
     let localBuffer = [];
 
     for (let day = 0; day < days; day++) {
@@ -145,6 +165,13 @@
       localData.push(localStorage);
       cloudData.push(cloudStorage);
       totalData.push(localStorage + cloudStorage);
+      
+      // Required keys over time
+      const logicalDedupedSoFar = cumulativeRaw - cumulativeStored;
+      const logicalDedupedKB = logicalDedupedSoFar * 1099511627.776;
+      const keys = Math.ceil(logicalDedupedKB / 32);
+      requiredKeysSeries.push(keys);
+
     }
 
     // Deduplication efficiency
