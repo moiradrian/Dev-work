@@ -1,0 +1,247 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Deduplication Calculator</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .form-group { margin-bottom: 10px; max-width: 400px; }
+    label { display: block; margin-bottom: 5px; }
+    input { padding: 5px; width: 100%; }
+    .chart-container { width: 100%; max-width: 800px; margin-top: 30px; }
+  </style>
+</head>
+<body>
+  <h1>Deduplication Calculator</h1>
+  <div class="form-group">
+    <label>1. Source Data Size (TiB):</label>
+    <input type="number" id="sourceSize" value="100" step="0.1"/>
+  </div>
+  <div class="form-group">
+    <label>2. Daily Change Rate (%):</label>
+    <input type="number" id="changeRate" value="2"/>
+  </div>
+  <div class="form-group">
+  	<label>3. Daily Retention (days):</label>
+  	<input type="number" id="dailyRetention" value="12" />
+  </div>
+  <div class="form-group">
+    <label>4. Weekly Retention (Count):</label>
+    <input type="number" id="weeklyRetention" value="4"/>
+  </div>
+  <div class="form-group">
+    <label>5. Monthly Retention (Count):</label>
+    <input type="number" id="monthlyRetention" value="12"/>
+  </div>
+  <div class="form-group">
+    <label>6. Yearly Retention (Count):</label>
+    <input type="number" id="yearlyRetention" value="7"/>
+  </div>
+  <div class="form-group">
+    <label>7. Simulation Time (months):</label>
+    <input type="number" id="simulationMonths" value="24"/>
+  </div>
+  <div class="form-group">
+    <label>8. Compression Ratio (e.g. 1.5 = 50% savings):</label>
+    <input type="number" id="compression" value="1.5" step="0.1"/>
+  </div>
+  <div class="form-group">
+    <label>9. Days Before Data Moves to Cloud:</label>
+    <input type="number" id="cloudDelay" value="5"/>
+  </div>
+  <button onclick="generateCharts()">Generate Charts</button>
+
+<div class="chart-wrapper">
+    <div class="chart-box">
+      <h2>Data Storage Over Time</h2>
+      <canvas id="storageChart" height="300"></canvas>
+    </div>
+    <div class="chart-box">
+      <h2>Deduplication Efficiency Over Time</h2>
+      <canvas id="dedupeChart" height="300"></canvas>
+    </div>
+    <div class="chart-wrapper">
+    <div id="storageChart" style="margin-top: 20px; font-weight: bold;"></div>
+    </div>
+    <div class="chart-wrapper">
+    <div id="dedupeChart" style="margin-top: 20px; font-weight: bold;"></div>
+  </div>
+  
+<script>
+  function generateCharts() {
+    const sourceSizeTiB = parseFloat(document.getElementById("sourceSize").value);
+    const changeRate = parseFloat(document.getElementById("changeRate").value) / 100;
+    const weeklyRetention = parseInt(document.getElementById("weeklyRetention").value);
+    const monthlyRetention = parseInt(document.getElementById("monthlyRetention").value);
+    const yearlyRetention = parseInt(document.getElementById("yearlyRetention").value);
+    const dailyRetention = parseInt(document.getElementById("dailyRetention").value) || 12;
+    const simulationMonths = parseInt(document.getElementById("simulationMonths").value);
+    const compressionRatio = parseFloat(document.getElementById("compression").value) / 100;
+    const daysToCloud = parseInt(document.getElementById("cloudDelay").value);
+
+    const days = simulationMonths * 30;
+    let labels = [];
+    let localData = [];
+    let cloudData = [];
+    let totalData = [];
+
+    let rawDataOverTime = [];
+    let storedDataOverTime = [];
+
+    let localStorage = 0;
+    let cloudStorage = 0;
+    let cumulativeRaw = 0;
+    let cumulativeStored = 0;
+
+    let localBuffer = [];
+
+    for (let day = 0; day < days; day++) {
+      labels.push("Day " + (day + 1));
+
+      const dailyRaw = day === 0 ? sourceSizeTiB : sourceSizeTiB * changeRate;
+      const rampFactor = Math.min(1, day / 10); // gradual dedupe start
+      const effectiveCompression = 1 - ((1 - compressionRatio) * rampFactor);
+      const dailyStored = dailyRaw * effectiveCompression;
+
+      cumulativeRaw += dailyRaw;
+      cumulativeStored += dailyStored;
+      rawDataOverTime.push(cumulativeRaw);
+      storedDataOverTime.push(cumulativeStored);
+
+      // Add today's data to buffer
+      localBuffer.push({
+        dayStored: day,
+        size: dailyStored,
+        movedToCloud: false,
+      });
+
+      // Move to cloud if older than daysToCloud
+      for (let entry of localBuffer) {
+        const age = day - entry.dayStored;
+        if (!entry.movedToCloud && age >= daysToCloud) {
+          cloudStorage += entry.size;
+          localStorage -= entry.size;
+          entry.movedToCloud = true;
+        }
+      }
+
+      // Add today's data to local storage
+      localStorage += dailyStored;
+
+      // Enforce daily retention
+      while (
+        localBuffer.length > 0 &&
+        (day - localBuffer[0].dayStored >= dailyRetention)
+      ) {
+        const removed = localBuffer.shift();
+        if (!removed.movedToCloud) {
+          localStorage -= removed.size;
+        }
+      }
+
+      localData.push(localStorage);
+      cloudData.push(cloudStorage);
+      totalData.push(localStorage + cloudStorage);
+    }
+
+    // Deduplication efficiency
+    let dedupePercent = rawDataOverTime.map((raw, i) => {
+      if (raw === 0) return 0;
+      const stored = storedDataOverTime[i];
+      return ((raw - stored) / raw) * 100;
+    });
+
+    // Destroy old charts
+    if (window.chart1 instanceof Chart) window.chart1.destroy();
+    if (window.chart2 instanceof Chart) window.chart2.destroy();
+
+    // Chart 1: Storage
+    const ctx1 = document.getElementById("storageChart").getContext("2d");
+    window.chart1 = new Chart(ctx1, {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: "Local Data (TiB)",
+            data: localData,
+            borderColor: "blue",
+            fill: false,
+          },
+          {
+            label: "Cloud Data (TiB)",
+            data: cloudData,
+            borderColor: "green",
+            fill: false,
+          },
+          {
+            label: "Total Stored (TiB)",
+            data: totalData,
+            borderColor: "black",
+            borderDash: [5, 5],
+            fill: false,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          title: {
+            display: true,
+            text: "Deduplicated & Compressed Storage Over Time",
+          },
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            title: {
+              display: true,
+              text: "Storage (TiB)",
+            },
+          },
+        },
+      },
+    });
+
+    // Chart 2: Deduplication %
+    const ctx2 = document.getElementById("dedupeChart").getContext("2d");
+    window.chart2 = new Chart(ctx2, {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: "Deduplication Efficiency (%)",
+            data: dedupePercent,
+            borderColor: "purple",
+            fill: false,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          title: {
+            display: true,
+            text: "Deduplication Efficiency Over Time",
+          },
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            max: 100,
+            title: {
+              display: true,
+              text: "Efficiency (%)",
+            },
+          },
+        },
+      },
+    });
+  }
+</script>
+</body>
+</html>
