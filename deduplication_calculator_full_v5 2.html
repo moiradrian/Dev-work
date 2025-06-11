@@ -40,7 +40,7 @@
   </div>
   <div class="form-group">
     <label>5. Monthly Retention (Count):</label>
-    <input type="number" id="monthlyRetention" value="11" class="input-param"/>
+    <input type="number" id="monthlyRetention" value="12" class="input-param"/>
   </div>
   <div class="form-group">
     <label>6. Yearly Retention (Count):</label>
@@ -68,7 +68,6 @@
         <p><strong>Total Cloud Data:</strong> <span id="totalCloud"></span> TiB</p>
         <p><strong>Total Deduplication Savings:</strong> <span id="finalEfficiency"></span> %</p>
         <p><strong>Logical Deduplicated Size:</strong> <span id="logicalDeduped">-</span> TiB</p>
-        <p><strong>Minimum Deduplication Ratio:</strong> <span id="mindeupeRatio">-</span></p>
         
    
     <h2>Dictionary Requirements</h2>
@@ -77,7 +76,7 @@
         <p><strong>Used Keys Percentage:</strong> <span id="usedKeysPercent">-</span></p>
         <p><strong>Base Ram Required:</strong> <span id="keyTierBase">-</span></p>
         <p><strong>Dictionary Size Required:</strong> <span id="keyTierSize">-</span></p>
-        <p><strong>Additional RAM Required:</strong> <span id="keyTierAddRAM">-</span> MB</p>
+        <p><strong>Additional RAM Required:</strong> <span id="keyTierAddRAM">-</span></p>
         <p><strong>Bit Shift Setting Required:</strong> <span id="keyTierShift">-</span></p>
         <p><strong>Page Shift Setting Required:</strong> <span id="keyTierPage">-</span></p>
   </div>
@@ -152,16 +151,20 @@
     for (let day = 0; day < days; day++) {
       labels.push("Day " + (day + 1));
 
-      //const dailyRaw = day === 0 ? sourceSizeTiB : sourceSizeTiB * changeRate;
-      const dailyRaw = sourceSizeTiB
-      const deduplicationRatio = day === 0 ? 1 : changeRate;
-      // Deduplication parameters
-      //const minDedupeRatio = 0.2;  // maximum deduplication (20% stored)
-      const rampUpDays = 3;       // deduplication ramp-up days
-      //const changeImpact = Math.min(1, 1 / changeRate);
+      const dailyRaw = day === 0 ? sourceSizeTiB : sourceSizeTiB * changeRate;
       
-      // Deduplication: only the changed data needs storing
-      // So deduplicationRatio = changeRate
+      // Deduplication parameters
+      const minDedupeRatio = 0.2;  // maximum deduplication (20% stored)
+      const rampUpDays = 3;       // deduplication ramp-up days
+      const changeImpact = Math.min(1, 1 / changeRate);
+
+      let deduplicationRatio;
+      if (day < rampUpDays) {
+        const rampFactor = day / rampUpDays;
+        deduplicationRatio = 1 - rampFactor * (1 - minDedupeRatio * changeImpact);     
+      } else {
+        deduplicationRatio = minDedupeRatio * changeImpact; // steady state after ramp-up
+      } 
 
       //Compression ramp factor
       const compressionRamp = Math.min(1, day / rampUpDays);
@@ -575,16 +578,13 @@
 });
     
     
-    
     document.getElementById("totalIngested").innerText = cumulativeRaw.toFixed(2);
     document.getElementById("totalStored").innerText = cumulativeStored.toFixed(2);
     document.getElementById("finalEfficiency").innerText =
     dedupePercent[dedupePercent.length - 1].toFixed(2);
     document.getElementById("totalCloud").innerText = cloudStorage.toFixed(2);
-  
     const logicalDeduped = cumulativeRaw - cumulativeStored;
     document.getElementById("logicalDeduped").innerText = logicalDeduped.toFixed(2);
-
     // Convert TiB to KB (1 TiB = 1,099,511,627.776 KB), then divide by 32
     const logicalDedupedKB = logicalDeduped * 1099511627.776;
     const requiredKeys = Math.ceil(logicalDedupedKB / 32);
@@ -592,7 +592,6 @@
       const matchedTierForStats = keyLookupTable.find(
       (row) => requiredKeys >= row.min && requiredKeys <= row.max
     );
-   
     //used keys pecentage
     const currentTier = keyLookupTable.find(
       (row) => requiredKeys >= row.min && requiredKeys <= row.max
@@ -608,7 +607,6 @@
     document.getElementById("keyTierAddRAM").innerText = matchedTierForStats?.Additional_RAM || "N/A";
     document.getElementById("keyTierShift").innerText = matchedTierForStats?.Shift || "N/A";
     document.getElementById("keyTierPage").innerText = matchedTierForStats?.Page_Shift || "N/A";
-    document.getElementById("mindeupeRatio").innerText = minDedupeRatio.toFixed(2);
 
   }
 </script>

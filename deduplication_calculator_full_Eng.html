@@ -1,3 +1,4 @@
+<!--QoreStor & Bridgehead Calculator - Copyright Quest Software 2025-->
 <!DOCTYPE html>
 <html lang="en">
 
@@ -48,36 +49,44 @@
       <h1>Deduplication Calculator</h1>
       <h2>Input Parameters</h2>
       <div class="form-group">
-        <label>1. Source Data Size (TiB):</label>
-        <input type="number" id="sourceSize" value="10" step="0.1" class="input-param" />
+        <label>1. Source Data Size (TiB):
+          <input type="number" id="sourceSize" value="10" step="0.1" class="input-param" />
+        </label>
       </div>
       <div class="form-group">
-        <label>2. Daily Change Rate (%):</label>
-        <input type="number" id="changeRate" value="2" class="input-param" />
+        <label>2. Daily Change Rate (%):
+          <input type="number" id="changeRate" value="2" class="input-param" />
+        </label>
       </div>
       <div class="form-group">
-        <label>3. Daily Retention (days):</label>
-        <input type="number" id="dailyRetention" value="12" class="input-param" />
+        <label>3. Daily Retention (days):
+          <input type="number" id="dailyRetention" value="12" class="input-param" />
+        </label>
       </div>
       <div class="form-group">
-        <label>4. Weekly Retention (Count):</label>
-        <input type="number" id="weeklyRetention" value="4" class="input-param" />
+        <label>4. Weekly Retention (Count):
+          <input type="number" id="weeklyRetention" value="4" class="input-param" />
+        </label>
       </div>
       <div class="form-group">
-        <label>5. Monthly Retention (Count):</label>
-        <input type="number" id="monthlyRetention" value="12" class="input-param" />
+        <label>5. Monthly Retention (Count):
+          <input type="number" id="monthlyRetention" value="11" class="input-param" />
+        </label>
       </div>
       <div class="form-group">
-        <label>6. Yearly Retention (Count):</label>
-        <input type="number" id="yearlyRetention" value="7" class="input-param" />
+        <label>6. Yearly Retention (Count):
+          <input type="number" id="yearlyRetention" value="7" class="input-param" />
+        </label>
       </div>
       <div class="form-group">
-        <label>7. Simulation Time (months):</label>
-        <input type="number" id="simulationMonths" value="24" class="input-param" />
+        <label>7. Simulation Time (months):
+          <input type="number" id="simulationMonths" value="24" class="input-param" />
+        </label>
       </div>
       <div class="form-group">
-        <label>8. Compression Savings (%):</label>
-        <input type="number" id="compression" value="50" step="1" class="input-param" />
+        <label>8. Compression Savings (%):
+          <input type="number" id="compression" value="50" step="1" class="input-param" />
+        </label>
       </div>
       <div class="form-group">
         <label>9. Days Before Data Moves to Cloud:</label>
@@ -85,12 +94,21 @@
       </div>
       <button onclick="generateCharts()">Generate Charts</button>
     </div>
-  </div>
+
+    <div id="retentionStats">
+      <style>
+        #retentionsStats {
+          border: 1px solid #ffffff;
+          padding: 1em;
+          margin-top: 1em;
+        }
+      </style>
+    </div>
     <div id="stats" style="flex: 1;">
       <h1>Simulation Summary</h1>
       <h2>Results</h2>
-      <p><strong>Total Source Data:</strong> <span id="totalIngested"></span> TiB</p>
-      <p><strong>Total Stored Data:</strong> <span id="totalStored"></span> TiB</p>
+      <p><strong>Total Source Data:</strong> <span id="totalRawDataTiB"></span></p>
+      <p><strong>Total Stored Data:</strong> <span id="storedDataOverTime"></span> TiB</p>
       <p><strong>Total Cloud Data:</strong> <span id="totalCloud"></span> TiB</p>
       <p><strong>Total Deduplication Savings:</strong> <span id="finalEfficiency"></span> %</p>
       <p><strong>Logical Deduplicated Size:</strong> <span id="logicalDeduped">-</span> TiB</p>
@@ -107,7 +125,6 @@
       <p><strong>Page Shift Setting Required:</strong> <span id="keyTierPage">-</span></p>
     </div>
   </div>
-
   <div class="chart-wrapper">
     <div class="chart-box">
       <h2>Data Storage Over Time</h2>
@@ -126,7 +143,9 @@
       <canvas id="keysChart" width="800" height="300" style="border: 2px solid #FB4F14;border-radius: 8px;"></canvas>
     </div>
   </div>
-  </div>
+
+
+
   <script>
     //lookup table for dictionary size, base and additional ram.
     const keyLookupTable = [
@@ -140,6 +159,95 @@
       { min: 183_254_734_167, max: 366_509_468_332, Base_RAM: "65536MB", Size: "4.224TiB", Additional_RAM: "18704", Shift: "26", Page_Shift: "12" }
     ];
 
+    function simulateRetention(days, sourceSizeTiB, changeRate, compressionPercent, dailyRetention, weeklyRetention, monthlyRetention, yearlyRetention, totalStored) {
+      const rampUpDays = 3;
+      const backupLog = [];
+
+      const stats = {
+        totalRetained: 0,
+        totalStorageTiB: 0,
+        peakStorageTiB: 0,
+        byTier: {
+          daily: 0,
+          weekly: 0,
+          monthly: 0,
+          yearly: 0
+        }
+      };
+
+      for (let day = 0; day < days; day++) {
+        const deduplicationRatio = day === 0 ? 1 : changeRate;
+        const compressionRamp = Math.min(1, day / rampUpDays);
+        const effectiveCompression = compressionPercent * compressionRamp;
+        const dailyStored = sourceSizeTiB * deduplicationRatio * (1 - effectiveCompression);
+
+        const backup = {
+          day,
+          size: dailyStored,
+          tiers: []
+        };
+
+        // Assign retention tiers
+        backup.tiers.push("daily");
+        if (day % 7 === 0) backup.tiers.push("weekly");
+        if (day % 30 === 0) backup.tiers.push("monthly");
+        if (day % 365 === 0) backup.tiers.push("yearly");
+
+        backupLog.push(backup);
+      }
+
+      // Calculate stats from backups with any tier assigned
+      for (const backup of backupLog) {
+        if (backup.tiers.length > 0) {
+          stats.totalRetained++;
+          stats.totalStorageTiB += backup.size;
+          const primaryTier = backup.tiers[0];
+          if (primaryTier) stats.byTier[primaryTier] += backup.size;
+        }
+      }
+
+      stats.peakStorageTiB = stats.totalStorageTiB;
+
+      document.getElementById("retentionStats").innerHTML = `
+      <h3>📊 Retention Stats</h3>
+      <p>Total Backups Retained: <strong>${stats.totalRetained}</strong></p>
+      <p>Total Storage Used: <strong>${stats.totalStorageTiB.toFixed(2)} TiB</strong></p>
+      <p>Peak Storage Usage: <strong>${stats.peakStorageTiB.toFixed(2)} TiB</strong></p>
+      <ul>
+      <li>Daily: ${stats.byTier.daily.toFixed(2)} TiB</li>
+      <li>Weekly: ${stats.byTier.weekly.toFixed(2)} TiB</li>
+      <li>Monthly: ${stats.byTier.monthly.toFixed(2)} TiB</li>
+      <li>Yearly: ${stats.byTier.yearly.toFixed(2)} TiB</li>
+      </ul>
+      `;
+      const storedDataOverTime = [];
+      for (let currentDay = 0; currentDay < days; currentDay++) {
+        let totalStored = 0;
+
+        for (const backup of backupLog) {
+          const age = currentDay - backup.day;
+          if (age < 0) continue;
+
+          const stillValid =
+            (backup.tiers.includes("daily") && age < dailyRetention) ||
+            (backup.tiers.includes("weekly") && age < weeklyRetention * 7) ||
+            (backup.tiers.includes("monthly") && age < monthlyRetention * 30) ||
+            (backup.tiers.includes("yearly") && age < yearlyRetention * 365);
+
+          if (stillValid) {
+            totalStored += backup.size;
+          }
+        }
+
+        storedDataOverTime.push(totalStored);
+      }
+
+      //console.log("Stored Data Over Time:", storedDataOverTime);
+      console.log("Total Stored:", totalStored);
+      return { backupLog, storedDataOverTime, totalStored };
+    }
+
+
 
     function generateCharts() {
       const sourceSizeTiB = parseFloat(document.getElementById("sourceSize").value);
@@ -147,10 +255,11 @@
       const weeklyRetention = parseInt(document.getElementById("weeklyRetention").value);
       const monthlyRetention = parseInt(document.getElementById("monthlyRetention").value);
       const yearlyRetention = parseInt(document.getElementById("yearlyRetention").value);
-      const dailyRetention = parseInt(document.getElementById("dailyRetention").value) || 12;
+      const dailyRetention = parseInt(document.getElementById("dailyRetention").value);
       const simulationMonths = parseInt(document.getElementById("simulationMonths").value);
       const compressionPercent = parseFloat(document.getElementById("compression").value) / 100;
       const daysToCloud = parseInt(document.getElementById("cloudDelay").value);
+
 
 
 
@@ -161,10 +270,8 @@
       let localData = [];
       let cloudData = [];
       let totalData = [];
-
       let rawDataOverTime = [];
-      let storedDataOverTime = [];
-
+      //let storedDataOverTime = [];
       let localStorage = 0;
       let cloudStorage = 0;
       let cumulativeRaw = 0;
@@ -172,88 +279,27 @@
       let requiredKeysSeries = [];
       let localBuffer = [];
 
-      // Calculate effective compression ratio
 
-      for (let day = 0; day < days; day++) {
-        labels.push("Day " + (day + 1));
+      // Initialize everything outside the loop
+      let currentStorage = 0;
+      let peakStorage = 0;
 
-        const dailyRaw = day === 0 ? sourceSizeTiB : sourceSizeTiB * changeRate;
-
-        // Deduplication parameters
-        const minDedupeRatio = 0.2;  // maximum deduplication (20% stored)
-        const rampUpDays = 3;       // deduplication ramp-up days
-        const changeImpact = Math.min(1, 1 / changeRate);
-
-        let deduplicationRatio;
-        if (day < rampUpDays) {
-          const rampFactor = day / rampUpDays;
-          deduplicationRatio = 1 - rampFactor * (1 - minDedupeRatio * changeImpact);
-        } else {
-          deduplicationRatio = minDedupeRatio * changeImpact; // steady state after ramp-up
-        }
-
-        //Compression ramp factor
-        const compressionRamp = Math.min(1, day / rampUpDays);
-        const effectiveCompression = compressionPercent * compressionRamp;
-
-        // Apply deduplication first, then compression
-        const dailyStored = dailyRaw * deduplicationRatio * (1 - effectiveCompression);
+      // Call simulateRetention function
+      const { backupLog, storedDataOverTime, totalStored } = simulateRetention(
+        days,
+        sourceSizeTiB,
+        changeRate,
+        compressionPercent,
+        dailyRetention,
+        weeklyRetention,
+        monthlyRetention,
+        yearlyRetention
+      );
 
 
-        //const rampFactor = Math.min(1, day / 10); // gradual dedupe start
-        //const effectiveCompression = compressionPercent * rampFactor;
-        //const dailyStored = dailyRaw * (1- effectiveCompression);
 
-        cumulativeRaw += dailyRaw;
-        cumulativeStored += dailyStored;
-        rawDataOverTime.push(cumulativeRaw);
-        storedDataOverTime.push(cumulativeStored);
-
-        // Add today's data to buffer
-        localBuffer.push({
-          dayStored: day,
-          size: dailyStored,
-          movedToCloud: false,
-        });
-
-        // Move to cloud if older than daysToCloud
-        for (let entry of localBuffer) {
-          const age = day - entry.dayStored;
-          if (!entry.movedToCloud && age >= daysToCloud) {
-            cloudStorage += entry.size;
-            localStorage -= entry.size;
-            entry.movedToCloud = true;
-          }
-        }
-
-        // Add today's data to local storage
-        localStorage += dailyStored;
-
-        // Enforce daily retention
-        while (
-          localBuffer.length > 0 &&
-          (day - localBuffer[0].dayStored >= dailyRetention)
-        ) {
-          const removed = localBuffer.shift();
-          if (!removed.movedToCloud) {
-            localStorage -= removed.size;
-          }
-        }
-
-        localData.push(localStorage);
-        cloudData.push(cloudStorage);
-        totalData.push(localStorage + cloudStorage);
-
-        // Required keys over time
-        const logicalDedupedSoFar = cumulativeRaw - cumulativeStored;
-        const logicalDedupedKB = logicalDedupedSoFar * 1099511627.776;
-        const keys = Math.ceil(logicalDedupedKB / 32);
-        requiredKeysSeries.push(keys);
-
-      }
       // Generate required keys series for disctionary size over time
       let tierLabelsOverTime = [];
-
       for (let i = 0; i < requiredKeysSeries.length; i += 30) {
         const keys = requiredKeysSeries[Math.min(i + 29, requiredKeysSeries.length - 1)];
         const tier = keyLookupTable.find(
@@ -294,6 +340,10 @@
         const stored = storedDataOverTime[i];
         return ((raw - stored) / raw) * 100;
       });
+      const totalRawDataTiB = sourceSizeTiB * days;
+      //document.getElementById("rawIngestStats").innerHTML = `
+      // <p><strong>${totalRawDataTiB.toFixed(2)} TiB</strong></p>
+      //`;
 
       // Destroy old charts
       if (window.chart1 instanceof Chart) window.chart1.destroy();
@@ -301,33 +351,20 @@
       if (window.chart3 instanceof Chart) window.chart3.destroy();
       if (window.chart4 instanceof Chart) window.chart4.destroy();
 
-      // Chart 1: Storage
-      const ctx1 = document.getElementById("storageChart").getContext("2d");
-      window.chart1 = new Chart(ctx1, {
+      //Chart 1: Storage over time
+      const ctx = document.getElementById("storageChart").getContext("2d");
+      new Chart(ctx, {
         type: "line",
         data: {
-          labels: labels,
-          datasets: [
-            {
-              label: "Local Data (TiB)",
-              data: localData,
-              borderColor: "blue",
-              fill: false,
-            },
-            {
-              label: "Cloud Data (TiB)",
-              data: cloudData,
-              borderColor: "green",
-              fill: false,
-            },
-            {
-              label: "Total Stored (TiB)",
-              data: totalData,
-              borderColor: "orange",
-              borderDash: [5, 5],
-              fill: false,
-            },
-          ],
+          labels: storedDataOverTime.map((_, i) => `Day ${i + 1}`), color: "white",
+          datasets: [{
+            label: "Stored Data Over Time (TiB)", color: "ffffff",
+            data: storedDataOverTime.map(val => val.toFixed(2)),
+            fill: false,
+            borderColor: "white",
+            backgroundColor: "rgba(0, 0, 255, 0.1)",
+            tension: 0.3
+          }]
         },
         options: {
           responsive: true,
@@ -339,24 +376,10 @@
             },
             title: {
               display: true,
-              text: "Deduplicated & Compressed Storage Over Time",
-              color: "#ffffff",
+              text: "Stored Data size over time", color: "#ffffff",
             },
           },
           scales: {
-            x: {
-              ticks: {
-                color: "#ffffff",
-              },
-              grid: {
-                color: "#444444",
-              },
-              title: {
-                display: true,
-                text: "Days",
-                color: "#ffffff",
-              },
-            },
             y: {
               ticks: {
                 color: "#ffffff",
@@ -367,14 +390,22 @@
               beginAtZero: true,
               title: {
                 display: true,
-                text: "Storage (TiB)",
-                color: "#ffffff",
+                text: "TiB",
+                color: "#ffffff"
               },
             },
-          },
-        },
+            x: {
+              ticks: {
+                color: "#ffffff",
+              },
+              grid: {
+                color: "#444444",
+              },
+              title: { display: true, text: "Day", color: "#ffffff" }
+            }
+          }
+        }
       });
-
       // Chart 2: Deduplication %
       const ctx2 = document.getElementById("dedupeChart").getContext("2d");
       window.chart2 = new Chart(ctx2, {
@@ -599,22 +630,21 @@
               }
             }
           }
+
         }
+      })//End of generateChart function
+      document.getElementById("totalRawDataTiB").innerText = totalRawDataTiB.toFixed(2);
+      //document.getElementById("totalStored").innerText = totalStored.toFixed(2);
 
-      });
-
-
-      document.getElementById("totalIngested").innerText = cumulativeRaw.toFixed(2);
-      document.getElementById("totalStored").innerText = cumulativeStored.toFixed(2);
-      document.getElementById("finalEfficiency").innerText =
-        dedupePercent[dedupePercent.length - 1].toFixed(2);
-      document.getElementById("totalCloud").innerText = cloudStorage.toFixed(2);
+      //document.getElementById("finalEfficiency").innerText =
+       // dedupePercent[dedupePercent.length - 1].toFixed(2);
+      //document.getElementById("totalCloud").innerText = cloudStorage.toFixed(2);
       const logicalDeduped = cumulativeRaw - cumulativeStored;
-      document.getElementById("logicalDeduped").innerText = logicalDeduped.toFixed(2);
-      // Convert TiB to KB (1 TiB = 1,099,511,627.776 KB), then divide by 32
+      //document.getElementById("logicalDeduped").innerText = logicalDeduped.toFixed(2);
+      //Convert TiB to KB (1 TiB = 1,099,511,627.776 KB), then divide by 32
       const logicalDedupedKB = logicalDeduped * 1099511627.776;
       const requiredKeys = Math.ceil(logicalDedupedKB / 32);
-      document.getElementById("requiredKeys").innerText = requiredKeys.toLocaleString();
+      //document.getElementById("requiredKeys").innerText = requiredKeys.toLocaleString();
       const matchedTierForStats = keyLookupTable.find(
         (row) => requiredKeys >= row.min && requiredKeys <= row.max
       );
@@ -634,19 +664,18 @@
       document.getElementById("keyTierShift").innerText = matchedTierForStats?.Shift || "N/A";
       document.getElementById("keyTierPage").innerText = matchedTierForStats?.Page_Shift || "N/A";
 
-    }
+    } //End of script
   </script>
-
   <script>
-    document.addEventListener("DOMContentLoaded", function () {
+    //document.addEventListener("DOMContentLoaded", function () {
       // Attach event listeners to all inputs
-      const inputs = document.querySelectorAll("input");
-      inputs.forEach((input) => {
-        input.addEventListener("input", generateCharts); // Run when any input changes
-      });
+     // const inputs = document.querySelectorAll("input");
+      //inputs.forEach((input) => {
+       // input.addEventListener("input", generateCharts); // Run when any input changes
+      //});
 
       // generateCharts(); // Initial render
-    });
+   // });
   </script>
 </body>
 
