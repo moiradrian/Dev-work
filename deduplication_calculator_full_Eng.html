@@ -345,6 +345,8 @@
       // <p><strong>${totalRawDataTiB.toFixed(2)} TiB</strong></p>
       //`;
 
+
+      
       // Destroy old charts
       if (window.chart1 instanceof Chart) window.chart1.destroy();
       if (window.chart2 instanceof Chart) window.chart2.destroy();
@@ -632,6 +634,9 @@
           }
 
         }
+
+
+        
       })//End of generateChart function
       document.getElementById("totalRawDataTiB").innerText = totalRawDataTiB.toFixed(2);
       //document.getElementById("totalStored").innerText = totalStored.toFixed(2);
