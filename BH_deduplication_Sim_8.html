@@ -195,8 +195,9 @@
             <h2>Results</h2>
             <p><strong>Total Logical Data Ingested:</strong> <span id="totalRawDataTiB">-</span> TiB</p>
             <p><strong>Total Stored Data:</strong> <span id="storedDataOverTime">-</span> TiB</p>
+            <p><strong>Total logical Data held: </strong><span id="heldRawDataTiB">-</span> TiB</p>
+            <p><strong>Number of Retained Backups: </strong><span id="snapshotsHeld">-</span></p>
             <p><strong>Deduplication Pre-Compression:</strong> <span id="dedupePreCompression">-</span> %</p>
-            <p><strong>Logical Deduplicated Size:</strong> <span id="logicalDeduped">-</span> TiB</p>
             <p><strong>Deduplication Post-Compression:</strong> <span id="finalEfficiency">-</span> %</p>
             <p><strong>Total Cloud Data:</strong> <span id="totalCloud">-</span> TiB</p>
 
@@ -262,7 +263,7 @@
     ) {
         const rampUpDays = 3;
         const backupLog = [];
-        const storedDataOverTime = [];
+        // const storedDataOverTime = [];
         const uncompressedDataOverTime = [];
         const storedLocallyOverTime = [];
         const storedInCloudOverTime = [];
@@ -272,6 +273,15 @@
         const requiredKeysSeries = [];
         const dictionarySizesOverTime = [];
         const tierMetaOverTime = [];
+        const retainedCountsOverTime = [];
+        const compressedDataOverTime = [];
+        const uncompressedLocalOverTime = [];
+        const uncompressedCloudOverTime = [];
+
+        const dailyCut = dailyRetention;                  // 12
+        const weeklyCut = dailyCut + weeklyRetention * 7;  // 12 + 4*7  = 40
+        const monthlyCut = weeklyCut + monthlyRetention * 30; // 40 + 11*30 = 370
+        const yearlyCut = monthlyCut + yearlyRetention * 365; // 370 + 7*365 = 2675
 
         const stats = {
             totalLogicalTiB: 0,
@@ -310,30 +320,66 @@
                 day, logicalSize, dedupedSize,
                 compressedSize, fullCompressedSize, tiers
             });
+            //console.log(`Day ${day}: lastSnapshot = ${lastSnapshot.toFixed(3)} TiB`);
+
         }
 
         // 2️⃣ simulate retention + local/cloud split
         for (let currentDay = 0; currentDay < days; currentDay++) {
+            let retainedCount = 0;
             let totalLogical = 0;
             let totalUncompressed = 0;
             let totalCompressed = 0;
             let localSum = 0;
             let cloudSum = 0;
+            let uncompressedLocal = 0;
+            let uncompressedCloud = 0;
 
             for (const b of backupLog) {
                 const age = currentDay - b.day;
                 if (age < 0) continue;
 
-                const keep =
+                //Old retention policy
+                /*const keep =
                     (age < dailyRetention) ||
                     (b.tiers.includes('weekly') && age < weeklyRetention * 7) ||
                     (b.tiers.includes('monthly') && age < monthlyRetention * 30) ||
                     (b.tiers.includes('yearly') && age < yearlyRetention * 365);
+                if (!keep) continue; */
+
+                const keep =
+                    // 1) daily: any snapshot younger than D days
+                    (age < dailyCut)
+                    // 2) weekly: one per week, but only in [D, weeklyCut)
+                    || (age >= dailyCut
+                        && age < weeklyCut
+                        && b.tiers.includes('weekly'))
+                    // 3) monthly: one per month, but only in [weeklyCut, monthlyCut)
+                    || (age >= weeklyCut
+                        && age < monthlyCut
+                        && b.tiers.includes('monthly'))
+                    // 4) yearly: one per year, but only in [monthlyCut, yearlyCut)
+                    || (age >= monthlyCut
+                        && age < yearlyCut
+                        && b.tiers.includes('yearly'));
                 if (!keep) continue;
+
+                //NEW: New retention policy to get to the correct number of savepoints in heldRawTiB
+
+                // 2.1 Count every snapshot that passes retention
+                retainedCount++;
 
                 // only sum the *new* delta for logical
                 totalLogical += b.dedupedSize;
                 totalUncompressed += b.dedupedSize;
+
+                //split the *uncompressed dedupe bytes by tier
+                if (b.day === 0 || (currentDay - b.day) < cloudDelay) {
+                    uncompressedLocal += b.dedupedSize;
+                }
+                if ((currentDay - b.day) >= cloudDelay) {
+                    uncompressedCloud += b.dedupedSize;
+                }
 
                 // single compressed contribution
                 const contrib = b.day === 0
@@ -341,34 +387,121 @@
                     : b.compressedSize;
 
                 totalCompressed += contrib;
-                if (b.day === 0 || age < cloudDelay) localSum += contrib;
-                else cloudSum += contrib;
-            }
 
+                // 1) everything younger than the cloud delay stays local
+                // 2) once age >= cloudDelay, it lives in the cloud
+                if (b.day === 0 || age < cloudDelay) {
+                    localSum += contrib;
+                }
+                if (age >= cloudDelay) {
+                    cloudSum += contrib;
+                }
+                //pre v8
+                /* if (b.day === 0 || age < cloudDelay) localSum += contrib;
+                else cloudSum += contrib; */
+            }
+            //2.2 pushing retained count
+            retainedCountsOverTime.push(retainedCount)
             retainedLogicalOverTime.push(totalLogical);
             uncompressedDataOverTime.push(totalUncompressed);
-            storedDataOverTime.push(totalCompressed);
+            // storedDataOverTime.push(totalCompressed);
             storedLocallyOverTime.push(localSum);
             storedInCloudOverTime.push(cloudSum);
+            compressedDataOverTime.push(totalCompressed);
+            uncompressedLocalOverTime.push(uncompressedLocal);
+            uncompressedCloudOverTime.push(uncompressedCloud);
 
-            // dedupe % post/pre compression
-            const postComp = totalLogical > 0
-                ? (totalLogical - totalCompressed) / totalLogical * 100
-                : 0;
-            const preComp = totalLogical > 0
-                ? (totalLogical - totalUncompressed) / totalLogical * 100
+            // NEW: sum local + cloud unique data into one series
+            const newTotalUncompressedOverTime = uncompressedLocalOverTime.map(
+                (loc, i) => loc + uncompressedCloudOverTime[i]
+            );
+
+            /* // dedupe % post/pre compression old pre v8
+           const postComp = totalLogical > 0
+               ? (totalLogical - totalCompressed) / totalLogical * 100
+               : 0;
+           const preComp = totalLogical > 0
+               ? (totalLogical - totalUncompressed) / totalLogical * 100
+               : 0;
+
+           dedupeEfficiencyOverTime.push(Math.max(0, postComp));
+           dedupePreCompressionOverTime.push(Math.max(0, preComp)); */
+
+            // NEW: dedupe % based on raw‐held vs stored
+            // rawHeld = raw backup size × # of snapshots still kept
+            const rawHeld = sourceSizeTiB * retainedCount;
+
+
+            // actual stored = local + cloud
+            const stored = localSum + cloudSum;
+
+            // For efficienccy we want the single-copy compressed footprint:
+            const compressedStored = totalCompressed;
+
+            // post‐compression dedupe = (rawHeld – stored) / rawHeld × 100
+            const postEff = rawHeld > 0
+                ? ((rawHeld - totalCompressed) / rawHeld) * 100
                 : 0;
 
-            dedupeEfficiencyOverTime.push(Math.max(0, postComp));
-            dedupePreCompressionOverTime.push(Math.max(0, preComp));
-        }
+
+            // pre‐compression dedupe = (rawHeld – totalUncompressed) / rawHeld × 100
+            const preEff = rawHeld > 0
+                ? ((rawHeld - totalUncompressed) / rawHeld) * 100
+                : 0;
+
+            dedupeEfficiencyOverTime.push(Math.max(0, postEff));
+            dedupePreCompressionOverTime.push(Math.max(0, preEff));
+
+            //logging for error
+            if (currentDay === days - 1) {
+                console.log({
+                    rawHeld: rawHeld.toFixed(2),
+                    uncompressed: totalUncompressed.toFixed(2),
+                    stored: stored.toFixed(2),
+                    preEff: preEff.toFixed(2) + '%',
+                    postEff: postEff.toFixed(2) + '%'
+                });
+            }
+        } //End of retention loop
+
+        const storedDataOverTime = storedLocallyOverTime.map(
+            (loc, i) => loc + storedInCloudOverTime[i]
+        );
+
+        // ── after the retention loop ──
+        const newTotalUncompressedOverTime = uncompressedLocalOverTime.map(
+            (loc, i) => loc + uncompressedCloudOverTime[i]
+        );
+
+
+
+        //-- after retnetion loop, coumpute raw-held volume --
+        // full raw backup size x how many snapshots are retained each day
+        const heldRawDataOverTime = retainedCountsOverTime.map(
+            count => sourceSizeTiB * count
+        );
+
+
 
         // 3️⃣ final‐stats
-        stats.totalLogicalTiB = retainedLogicalOverTime.at(-1) || 0;
+        //old from v7
+        //stats.totalLogicalTiB = retainedLogicalOverTime.at(-1) || 0;
+        // new for v8 - fix for incorrect total ingested data.
+        //stats.totalLogicalTiB = lastSnapshot;
+
+        //revised v8 to collect total logical data pre-dedupe & compression
+        const numBackups = days;
+        stats.totalLogicalTiB = sourceSizeTiB * numBackups
+
+        // NEW: raw-backup volume still held under retention
+        stats.heldRawDataTiB = heldRawDataOverTime.at(-1);
+        stats.snapshotsHeld = retainedCountsOverTime.at(-1) || 0;
         stats.totalUncompressedTiB = uncompressedDataOverTime.at(-1) || 0;
         stats.totalStorageTiB = storedDataOverTime.at(-1) || 0;
         stats.totalCloudTiB = storedInCloudOverTime.at(-1) || 0;
 
+
+        /* //Pre v8 - didn't use the new heldRawDataOverTime method
         // dictionary timeline (daily keys & tiers)
         retainedLogicalOverTime.forEach(logicalTiB => {
             const numKeys = Math.floor((logicalTiB * 1024 ** 3) / 32);
@@ -376,9 +509,54 @@
             const match = keyLookupTable.find(k => numKeys >= k.min && numKeys <= k.max) || {};
             tierMetaOverTime.push(match);
             dictionarySizesOverTime.push(match.Size || 'N/A');
+        }); */
+
+        //NEW: calculates keys required using heldRawDataOverTime
+        requiredKeysSeries.length = 0;
+        tierMetaOverTime.length = 0;
+        dictionarySizesOverTime.length = 0;
+
+
+        heldRawDataOverTime.forEach((heldRawTiB, i) => {
+            // 1) what physical storage we’re using today
+            const localTiB = storedLocallyOverTime[i] || 0;
+            const cloudTiB = storedInCloudOverTime[i] || 0;
+            //const storedTiB = localTiB + cloudTiB;
+            const storedTiB = storedDataOverTime[i] || 0;
+            const compTiB = compressedDataOverTime[i] || 0;
+            const dictVolume = heldRawTiB - compTiB;
+
+
+
+
+
+            // 2) the “deduped” logical volume = raw-held minus physical‐stored
+            const logicalDedupedTiB = heldRawTiB - storedTiB;
+
+            // 3) convert to KiB and divide by 32 to get the number of keys
+            const numKeys = Math.floor((dictVolume * 1024 ** 3) / 32);
+            requiredKeysSeries.push(numKeys);
+
+            // 4) find its tier & size from your lookup table
+            const match = keyLookupTable.find(
+                k => numKeys >= k.min && numKeys <= k.max
+            ) || {};
+
+            console.log(`Day ${i + 1}:
+                rawHeldTiB: ${heldRawTiB.toFixed(2)},
+                localTiB:   ${localTiB.toFixed(2)},
+                cloudTiB:   ${cloudTiB.toFixed(2)},
+                storedTiB:  ${storedTiB.toFixed(2)},
+                dictVol:    ${dictVolume.toFixed(2)},
+                numKeys:    ${numKeys},
+                tier:       ${match.Size || 'N/A'}
+                `.replace(/\n\s*/g, ' '));
+
+            tierMetaOverTime.push(match);
+            dictionarySizesOverTime.push(match.Size || 'N/A');
         });
 
-        // final dictionary stat
+        /* // final dictionary stat - old pre v8 version not using heldRawDataTiB
         const logicalDedupedTiB = stats.totalLogicalTiB - stats.totalStorageTiB;
         const finalKeys = Math.floor((logicalDedupedTiB * 1024 ** 3) / 32);
         const finalTier = keyLookupTable.find(e => finalKeys >= e.min && finalKeys <= e.max) || {};
@@ -387,11 +565,45 @@
             requiredKeys: finalKeys,
             tier: finalTier,
             usedPct
+        }; */
+        stats.totalCompressedTiB = compressedDataOverTime.at(-1) || 0;
+        //NEW: final dictionary stat using new heldRawDataTiB
+        //const finalLogicalDedupedTiB = stats.heldRawDataTiB - stats.totalStorageTiB;
+        const finalLogicalDedupedTiB = stats.heldRawDataTiB - stats.totalCompressedTiB;
+        const finalKeys = Math.floor((finalLogicalDedupedTiB * 1024 ** 3) / 32);
+        const finalTier = keyLookupTable.find(
+            k => finalKeys >= k.min && finalKeys <= k.max
+        ) || {};
+        const usedPct = finalTier.max
+            ? (finalKeys / finalTier.max) * 100
+            : 0;
+
+        stats.dictionary = {
+            requiredKeys: finalKeys,
+            tier: finalTier,
+            usedPct
         };
+
+        // after you’ve done your final‐dict calculation:
+        const finalCompressedTiB = compressedDataOverTime.at(-1) || 0;
+        //const finalLogicalDedupedTiB = stats.heldRawDataTiB - finalCompressedTiB;
+        //const finalKeys = Math.floor((finalLogicalDedupedTiB * 1024 ** 3) / 32);
+        //const finalTier = keyLookupTable.find(
+        //  k => finalKeys >= k.min && finalKeys <= k.max
+        // ) || {};
+
+        console.log(`Final Summary:
+                rawHeldTiB:    ${stats.heldRawDataTiB.toFixed(2)},
+                compressedTiB: ${finalCompressedTiB.toFixed(2)},
+                dictVol:       ${finalLogicalDedupedTiB.toFixed(2)},
+                finalKeys:     ${finalKeys},
+                tier:          ${finalTier.Size || 'N/A'}
+                `.replace(/\n\s*/g, ' '));
 
         return {
             storedDataOverTime,
             uncompressedDataOverTime,
+            compressedDataOverTime,
             storedLocallyOverTime,
             storedInCloudOverTime,
             dedupeEfficiencyOverTime,
@@ -400,6 +612,10 @@
             requiredKeysSeries,
             dictionarySizesOverTime,
             tierMetaOverTime,
+            heldRawDataOverTime,
+            uncompressedLocalOverTime,
+            uncompressedCloudOverTime,
+            newTotalUncompressedOverTime,
             stats
         };
     }
@@ -482,35 +698,125 @@
             storedDataOverTime, storedLocallyOverTime, storedInCloudOverTime,
             dedupeEfficiencyOverTime, dedupePreCompressionOverTime,
             retainedLogicalOverTime, requiredKeysSeries,
-            dictionarySizesOverTime, tierMetaOverTime, stats
+            dictionarySizesOverTime, tierMetaOverTime, heldRawDataOverTime, stats, storedTiB,
+            uncompressedDataOverTime, compressedDataOverTime, uncompressedLocalOverTime, uncompressedCloudOverTime,
+            newTotalUncompressedOverTime
         } = simulateRetention(
             days, sourceSizeTiB, changeRate, compressionPct,
             dailyRetention, weeklyRetention, monthlyRetention,
             yearlyRetention, cloudDelay
         );
+        stats.dedupePostCompressionPct = dedupeEfficiencyOverTime.at(-1) || 0;
+        stats.dedupePreCompressionPct = dedupePreCompressionOverTime.at(-1) || 0;
+        stats.totalCompressedTiB = compressedDataOverTime.at(-1) || 0;
+
+
+        //total uncomoressed unique data each day
+        const totalUncompressedOverTime = uncompressedLocalOverTime.map(
+            (loc, i) => loc + uncompressedCloudOverTime[i]
+        );
+
+        // final “raw held” TiB from your loop
+        const finalRawHeldTiB = stats.heldRawDataTiB;
+
+
+        // final total unique-but-uncompressed footprint
+        const finalUncomp = totalUncompressedOverTime.at(-1) || 0;
+
+
+        // pre-compression efficiency
+        stats.dedupePreCompressionPct = finalRawHeldTiB > 0
+            ? ((finalRawHeldTiB - finalUncomp) / finalRawHeldTiB) * 100
+            : 0;
+
 
         // monthly down-sampling
         const monthLabels = Array.from({ length: simMonths }, (_, i) => `Month ${i + 1}`);
-        const monthlyKeys = requiredKeysSeries.filter((_, i) => i % 30 === 0);
-        const monthlyDict = dictionarySizesOverTime.filter((_, i) => i % 30 === 0);
-        const monthlyMeta = tierMetaOverTime.filter((_, i) => i % 30 === 0);
+        //const monthlyKeys = requiredKeysSeries.filter((_, i) => i % 30 === 0);
+        //const monthlyDict = dictionarySizesOverTime.filter((_, i) => i % 30 === 0);
+        //const monthlyMeta = tierMetaOverTime.filter((_, i) => i % 30 === 0);
+
+        // NEW: end of month alighnment for required keys and required dict sizing
+        const daysCount = requiredKeysSeries.length;
+        const lastIdx = daysCount - 1;
+
+        const monthlyKeys = monthLabels.map((_, m) => {
+            // ideal end-of-month index
+            const ideal = (m + 1) * 30 - 1;
+            // clamp so we never overshoot the last day
+            const idx = Math.min(ideal, lastIdx);
+            return requiredKeysSeries[idx] || 0;
+        });
+
+        const monthlyDict = monthLabels.map((_, m) => {
+            const ideal = (m + 1) * 30 - 1;
+            const idx = Math.min(ideal, lastIdx);
+            return dictionarySizesOverTime[idx] || 'N/A';
+        });
+
+        const monthlyMeta = monthLabels.map((_, m) => {
+            const ideal = (m + 1) * 30 - 1;
+            const idx = Math.min(ideal, lastIdx);
+            return tierMetaOverTime[idx] || {};
+        });
+
+        // sanity check
+        console.log({
+            daysCount,
+            lastIdx,
+            monthLabels,
+            monthlyKeys,
+            lastRequiredKey: requiredKeysSeries[lastIdx],
+            lastMonthlyKey: monthlyKeys[monthlyKeys.length - 1]
+        });
+
+        //calculate total stored data
+        const finalLocalTiB = storedLocallyOverTime.at(-1);
+        const finalCloudTiB = storedInCloudOverTime.at(-1);
+        stats.totalLocalStoredTiB = finalLocalTiB;
+        stats.totalCloudStoredTiB = finalCloudTiB;
+        stats.totalStoredTiB = finalLocalTiB + finalCloudTiB;
 
         // ─── Update Stats Panel ───────────────────────
         const totLogical = stats.totalLogicalTiB;
         const totUncomp = stats.totalUncompressedTiB;
         const totStored = stats.totalStorageTiB;
         const totCloud = stats.totalCloudTiB;
+        const heldRawDataTiB = stats.heldRawDataTiB;
+
+        // using for new dedupe stats panel output
+        //stats.dedupePreCompressionPct = dedupePreCompressionOverTime.at(-1) || 0;
+        //stats.dedupePostCompressionPct = dedupeEfficiencyOverTime.at(-1) || 0;
+
+        /* old pre v8 dedupe stats
         // % pre-compression
         const preSave = totLogical > 0 ? (totLogical - totUncomp) / totLogical * 100 : 0;
         // % post-compression
-        const postSave = totLogical > 0 ? (totLogical - totStored) / totLogical * 100 : 0;
+        const postSave = totLogical > 0 ? (totLogical - totStored) / totLogical * 100 : 0; */
+
+        /*//NEW: Using new heldRawData values for dedupe efficiency
+        // ── new raw‐held vs stored formula ──
+        const rawHeld = stats.heldRawDataTiB;
+        const stored = stats.totalStoredTiB;
+        const uncompressed = stats.totalUncompressedTiB;  // if you don’t have this, you can derive it as the last element of your totalUncompressedOverTime series
+
+        // pre‐compression dedupe = (rawHeld – uncompressed) / rawHeld × 100
+        stats.dedupePreCompressionPct = rawHeld > 0
+            ? ((rawHeld - uncompressed) / rawHeld) * 100
+            : 0;
+
+        // post‐compression dedupe = (rawHeld – stored) / rawHeld × 100
+        stats.dedupePostCompressionPct = rawHeld > 0
+            ? ((rawHeld - stored) / rawHeld) * 100
+            : 0; */
 
         document.getElementById('totalRawDataTiB').textContent = totLogical.toFixed(2);
-        document.getElementById('storedDataOverTime').textContent = totStored.toFixed(2);
-        document.getElementById('dedupePreCompression').textContent = preSave.toFixed(2);
-        document.getElementById('logicalDeduped').textContent = (totLogical - totStored).toFixed(2);
-        document.getElementById('finalEfficiency').textContent = postSave.toFixed(2);
+        document.getElementById('storedDataOverTime').textContent = stats.totalStoredTiB.toFixed(2);
+        document.getElementById('dedupePreCompression').textContent = stats.dedupePreCompressionPct.toFixed(2) + '%';
+        document.getElementById('finalEfficiency').textContent = stats.dedupePostCompressionPct.toFixed(2);
         document.getElementById('totalCloud').textContent = totCloud.toFixed(2);
+        document.getElementById('heldRawDataTiB').textContent = heldRawDataTiB.toFixed(2);
+        document.getElementById('snapshotsHeld').textContent = stats.snapshotsHeld.toLocaleString();
 
         // dictionary final
         const { requiredKeys, tier, usedPct } = stats.dictionary;
@@ -531,17 +837,20 @@
         });
 
         // Chart 1: Stored Data
+        const totalStoredOverTime = storedLocallyOverTime.map(
+            (loc, i) => loc + storedInCloudOverTime[i]
+        );
         window.chart1 = new Chart(
             document.getElementById('storageChart').getContext('2d'),
             {
                 type: 'line',
                 data: {
                     labels: daysLabels, datasets: [{
-                        label: 'Stored Data (TiB)', data: storedDataOverTime,
+                        label: 'Stored Data (TiB)', data: totalStoredOverTime,
                         borderColor: 'orange', fill: true, tension: 0.3
                     }]
                 }
-                , options: getChartOptions('Stored Data Over Time', 'Day', 'TiB')
+                , options: getChartOptions('Total Stored Data Over Time', 'Day', 'TiB')
             }
         );
 
@@ -556,7 +865,7 @@
                         borderColor: 'lightgreen', fill: false, tension: 0.3
                     }]
                 }
-                , options: getChartOptions('Deduplication Efficiency Over Time', 'Day', '% Efficiency', 100)
+                , options: getChartOptions('Deduplication & Compression Efficiency Over Time', 'Day', '% Efficiency', 100)
             }
         );
 
@@ -595,7 +904,7 @@
                     callbacks: {
                         label: ctx => {
                             // `tierMetaOverTime` must be the array you returned from simulateRetention
-                            const meta = tierMetaOverTime[ctx.dataIndex] || {};
+                            const meta = monthlyMeta[ctx.dataIndex] || {};
                             return [
                                 `Size: ${meta.Size || "N/A"}`,
                                 `Base RAM: ${meta.Base_RAM || "N/A"}`,
@@ -637,7 +946,7 @@
                 labels: monthLabels,
                 datasets: [{
                     label: "Dictionary Tier",
-                    data: dictionarySizesOverTime.map((size, i) => ({
+                    data: monthlyDict.map((size, i) => ({
                         x: monthLabels[i],
                         y: size
                     })),
@@ -650,6 +959,25 @@
             options: baseOpts4
         });
 
+        //New for version 8 custom tool tip for chart 5 - local & cloud consumption totals
+        // build a custom options object for chart5
+
+        const cloudOpts = getChartOptions('Local vs Cloud Storage', 'Day', 'TiB');
+        cloudOpts.interaction = {
+            mode: 'index',    // show both lines on hover
+            intersect: false
+        };
+        cloudOpts.plugins.tooltip = {
+            callbacks: {
+                // format each line
+                label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)} TiB`,
+                // add a footer with the sum
+                footer: items => {
+                    const total = items.reduce((sum, item) => sum + item.parsed.y, 0);
+                    return `Total: ${total.toFixed(2)} TiB`;
+                }
+            }
+        };
 
 
 
@@ -670,7 +998,10 @@
                         }
                     ]
                 }
-                , options: getChartOptions('Local vs Cloud Storage', 'Day', 'TiB')
+
+                //options: getChartOptions('Local vs Cloud Storage', 'Day', 'TiB')
+                //new for v8
+                , options: cloudOpts
             }
         );
     }
