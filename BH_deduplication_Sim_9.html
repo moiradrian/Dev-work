@@ -11,7 +11,6 @@
         Chart.defaults.color = '#ffffff';
     </script>
     <style>
-
         /* CSS config */
         body {
             font-family: Arial, sans-serif;
@@ -194,14 +193,15 @@
             <p><strong>Total Cloud Data:</strong> <span id="totalCloud">-</span>TiB</p>
 
             <h2>Dictionary Requirements</h2>
-            <p><strong>Required Keys (KB/32):</strong> <span id="requiredKeys">-</span></p>
+            <p><strong>Required Keys :</strong> <span id="requiredKeys">-</span></p>
             <p><strong>Total Max Keys Available:</strong> <span id="totalMaxKeys">-</span></p>
-            <p><strong>Used Keys Percentage:</strong> <span id="usedKeysPercent">-</span>%</p>
+            <p><strong>Used Keys Percentage:</strong> <span id="usedKeysPercent">-</span></p>
             <p><strong>Base RAM Required:</strong> <span id="keyTierBase">-</span></p>
             <p><strong>Dictionary Size Required:</strong> <span id="keyTierSize">-</span></p>
             <p><strong>Additional RAM Required:</strong> <span id="keyTierAddRAM">-</span></p>
             <p><strong>Bit Shift Setting:</strong> <span id="keyTierShift">-</span></p>
             <p><strong>Page Shift Setting:</strong> <span id="keyTierPage">-</span></p>
+            <p><strong>Block Map Size:</strong> <span id="blockMapSize">-</span>GiB</p>
         </div>
     </div>
 </body>
@@ -227,6 +227,10 @@
         <div class="chart-box">
             <h3>Local vs Cloud Storage Over Time</h3>
             <canvas id="cloudChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <h3>Block Map Size Over Time</h3>
+            <canvas id="blockMapChart"></canvas>
         </div>
     </div>
 </div>
@@ -268,6 +272,7 @@
         const compressedDataOverTime = [];
         const uncompressedLocalOverTime = [];
         const uncompressedCloudOverTime = [];
+        const blockMapOverTime = [];
 
         const dailyCut = dailyRetention;                  // 12
         const weeklyCut = dailyCut + weeklyRetention * 7;  // 12 + 4*7  = 40
@@ -381,6 +386,12 @@
             retainedLogicalOverTime.push(totalLogical);
             uncompressedDataOverTime.push(totalUncompressed);
 
+            // 🔳 New: Block‐map size over time (GiB)
+            //   rawHeldTiB → KiB (×1024³) → # 8‐KiB blocks (÷8) → ×48 bytes → GiB (÷1024³)
+            // simplifies to rawHeldTiB × 6 GiB
+            const blockMapThisDay = (sourceSizeTiB * retainedCount) * 3;
+            blockMapOverTime.push(blockMapThisDay);
+
             // storedDataOverTime.push(totalCompressed);
             storedLocallyOverTime.push(localSum);
             storedInCloudOverTime.push(cloudSum);
@@ -416,14 +427,26 @@
             dedupeEfficiencyOverTime.push(Math.max(0, postEff));
             dedupePreCompressionOverTime.push(Math.max(0, preEff));
 
+            // 🔑 Keys based on the deduped+compressed footprint
+            // totalCompressed is already the sum of all contrib for today
+            const footprintTiB = localSum + cloudSum;
+            const numKeys = Math.floor(footprintTiB * (1024 ** 3) / 8);
+            requiredKeysSeries.push(numKeys);
+
+            const match = keyLookupTable.find(
+                k => numKeys >= k.min && numKeys <= k.max
+            ) || {};
+            tierMetaOverTime.push(match);
+            dictionarySizesOverTime.push(match.Size || 'N/A');
+
+
             //logging for value checking - Comment out if not required
             if (currentDay === days - 1) {
                 console.log({
-                    rawHeld: rawHeld.toFixed(2),
-                    uncompressed: totalUncompressed.toFixed(2),
-                    stored: stored.toFixed(2),
-                    preEff: preEff.toFixed(2) + '%',
-                    postEff: postEff.toFixed(2) + '%'
+                    totalCompressedTiB: footprintTiB.toFixed(2),
+                    kib: (footprintTiB * (1024 ** 3)).toFixed(0),
+                    numKeys,
+                    expected: Math.floor((footprintTiB * (1024 ** 3)) / 8)
                 });
             }
         } //End of retention loop
@@ -431,7 +454,7 @@
         // ── after the retention loop, set time series data  ──
         const storedDataOverTime = storedLocallyOverTime.map(
             (loc, i) => loc + storedInCloudOverTime[i]
-        );  
+        );
         const newTotalUncompressedOverTime = uncompressedLocalOverTime.map(
             (loc, i) => loc + uncompressedCloudOverTime[i]
         );
@@ -441,7 +464,6 @@
         const heldRawDataOverTime = retainedCountsOverTime.map(
             count => sourceSizeTiB * count
         );
-
 
 
         // 3️⃣ final‐stats
@@ -457,57 +479,12 @@
         stats.totalStorageTiB = storedDataOverTime.at(-1) || 0;
         stats.totalCloudTiB = storedInCloudOverTime.at(-1) || 0;
 
-        // Calculates keys required using heldRawDataOverTime
-        requiredKeysSeries.length = 0;
-        tierMetaOverTime.length = 0;
-        dictionarySizesOverTime.length = 0;
-
-        heldRawDataOverTime.forEach((heldRawTiB, i) => {
-            // 1) what physical storage we’re using today
-            const localTiB = storedLocallyOverTime[i] || 0;
-            const cloudTiB = storedInCloudOverTime[i] || 0;
-            //const storedTiB = localTiB + cloudTiB;
-            const storedTiB = storedDataOverTime[i] || 0;
-            const compTiB = compressedDataOverTime[i] || 0;
-            const dictVolume = heldRawTiB - compTiB;
-
-            // 2) the “deduped” logical volume = raw-held minus physical‐stored
-            const logicalDedupedTiB = heldRawTiB - storedTiB;
-
-            // 3) convert to KiB and divide by 32 to get the number of keys
-            const numKeys = Math.floor((dictVolume * 1024 ** 3) / 32);
-            requiredKeysSeries.push(numKeys);
-
-            // 4) find its tier & size from your lookup table
-            const match = keyLookupTable.find(
-                k => numKeys >= k.min && numKeys <= k.max
-            ) || {};
-
-            // Logging to check Values - comment out if not required.
-            console.log(`Day ${i + 1}:
-                rawHeldTiB: ${heldRawTiB.toFixed(2)},
-                localTiB:   ${localTiB.toFixed(2)},
-                cloudTiB:   ${cloudTiB.toFixed(2)},
-                storedTiB:  ${storedTiB.toFixed(2)},
-                dictVol:    ${dictVolume.toFixed(2)},
-                numKeys:    ${numKeys},
-                tier:       ${match.Size || 'N/A'}
-                `.replace(/\n\s*/g, ' '));
-
-            tierMetaOverTime.push(match);
-            dictionarySizesOverTime.push(match.Size || 'N/A');
-        });
 
         // final dictionary stats using time series data
-         stats.totalCompressedTiB = compressedDataOverTime.at(-1) || 0;
+        stats.totalCompressedTiB = compressedDataOverTime.at(-1) || 0;
 
-        // Final dictionary stat using new heldRawDataTiB
-        //const finalLogicalDedupedTiB = stats.heldRawDataTiB - stats.totalStorageTiB;
-        const finalLogicalDedupedTiB = stats.heldRawDataTiB - stats.totalCompressedTiB;
-        const finalKeys = Math.floor((finalLogicalDedupedTiB * 1024 ** 3) / 32);
-        const finalTier = keyLookupTable.find(
-            k => finalKeys >= k.min && finalKeys <= k.max
-        ) || {};
+        const finalKeys = requiredKeysSeries[requiredKeysSeries.length - 1];
+        const finalTier = tierMetaOverTime[requiredKeysSeries.length - 1];
         const usedPct = finalTier.max
             ? (finalKeys / finalTier.max) * 100
             : 0;
@@ -518,17 +495,18 @@
             usedPct
         };
 
+        // ── New Block Map Size Stat ──
+        // 1) TiB → KiB
+        const rawHeldKiB = stats.heldRawDataTiB * (1024 ** 3);
+        // 2) one block = 8 KiB → total blocks
+        const totalBlocks = rawHeldKiB / 16;
+        // 3) each block entry is 48 bytes → map bytes
+        const blockMapBytes = totalBlocks * 48;
+        // 4) bytes → GiB
+        stats.blockMapSizeGiB = blockMapBytes / (1024 ** 3);
+
         // after final‐dict calculation:
         const finalCompressedTiB = compressedDataOverTime.at(-1) || 0;
-        
-        //logging for value checking - comment out if not required
-        console.log(`Final Summary:
-                rawHeldTiB:    ${stats.heldRawDataTiB.toFixed(2)},
-                compressedTiB: ${finalCompressedTiB.toFixed(2)},
-                dictVol:       ${finalLogicalDedupedTiB.toFixed(2)},
-                finalKeys:     ${finalKeys},
-                tier:          ${finalTier.Size || 'N/A'}
-                `.replace(/\n\s*/g, ' '));
 
         return {
             storedDataOverTime,
@@ -546,6 +524,7 @@
             uncompressedLocalOverTime,
             uncompressedCloudOverTime,
             newTotalUncompressedOverTime,
+            blockMapOverTime,
             stats
         };
     }
@@ -629,7 +608,7 @@
             storedDataOverTime, storedLocallyOverTime, storedInCloudOverTime,
             dedupeEfficiencyOverTime, dedupePreCompressionOverTime,
             retainedLogicalOverTime, requiredKeysSeries,
-            dictionarySizesOverTime, tierMetaOverTime, heldRawDataOverTime, stats, storedTiB,
+            dictionarySizesOverTime, tierMetaOverTime, heldRawDataOverTime, blockMapOverTime, stats, storedTiB,
             uncompressedDataOverTime, compressedDataOverTime, uncompressedLocalOverTime, uncompressedCloudOverTime,
             newTotalUncompressedOverTime
         } = simulateRetention(
@@ -714,20 +693,48 @@
         const totStored = stats.totalStorageTiB;
         const totCloud = stats.totalCloudTiB;
         const heldRawDataTiB = stats.heldRawDataTiB;
-        
-        document.getElementById('totalRawDataTiB').textContent = totLogical.toFixed(2);
-        document.getElementById('storedDataOverTime').textContent = stats.totalStoredTiB.toFixed(2);
-        document.getElementById('dedupePreCompression').textContent = stats.dedupePreCompressionPct.toFixed(2);
-        document.getElementById('finalEfficiency').textContent = stats.dedupePostCompressionPct.toFixed(2);
-        document.getElementById('totalCloud').textContent = totCloud.toFixed(2);
-        document.getElementById('heldRawDataTiB').textContent = heldRawDataTiB.toFixed(2);
+
+        //document.getElementById('totalRawDataTiB').textContent = totLogical.toFixed(2);
+        document.getElementById('totalRawDataTiB').textContent = totLogical.toLocaleString(2);
+        document.getElementById('storedDataOverTime').textContent = stats.totalStoredTiB.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+        document.getElementById('dedupePreCompression').textContent = stats.dedupePreCompressionPct.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+        document.getElementById('finalEfficiency').textContent = stats.dedupePostCompressionPct.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+        document.getElementById('totalCloud').textContent = totCloud.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+        document.getElementById('heldRawDataTiB').textContent = heldRawDataTiB.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
         document.getElementById('snapshotsHeld').textContent = stats.snapshotsHeld.toLocaleString();
+        document.getElementById('blockMapSize').textContent = stats.blockMapSizeGiB.toLocaleString(2);
 
         // dictionary final
         const { requiredKeys, tier, usedPct } = stats.dictionary;
-        document.getElementById('requiredKeys').textContent = requiredKeys.toLocaleString();
+        document.getElementById('requiredKeys').textContent = stats.dictionary.requiredKeys.toLocaleString();
         document.getElementById('totalMaxKeys').textContent = (tier.max || 0).toLocaleString();
         document.getElementById('usedKeysPercent').textContent = usedPct.toFixed(2);
+        // ─── Update Used Keys Percent ───────────────────────
+        //const usedPct = stats.dictionary.usedPct;
+        const usedEl = document.getElementById('usedKeysPercent');
+        usedEl.textContent = usedPct.toFixed(2) + '%';
+
+        // turn red if ≥90%, otherwise default (inherit)
+        if (usedPct >= 90) {
+            usedEl.style.color = 'red';
+        } else {
+            usedEl.style.color = '';  // fall back to whatever your CSS says
+        }
         document.getElementById('keyTierBase').textContent = tier.Base_RAM || 'N/A';
         document.getElementById('keyTierSize').textContent = tier.Size || 'N/A';
         document.getElementById('keyTierAddRAM').textContent = tier.Additional_RAM || 'N/A';
@@ -737,7 +744,7 @@
 
         // ─── Render Charts ────────────────────────────
         // destroy old charts - clean for new charts
-        ['chart1', 'chart2', 'chart3', 'chart4', 'chart5'].forEach(id => {
+        ['chart1', 'chart2', 'chart3', 'chart4', 'chart5', 'chart6'].forEach(id => {
             if (window[id] instanceof Chart) window[id].destroy();
         });
 
@@ -752,7 +759,7 @@
                 data: {
                     labels: daysLabels, datasets: [{
                         label: 'Stored Data (TiB)', data: totalStoredOverTime,
-                        borderColor: 'orange', fill: true, tension: 0.3
+                        borderColor: 'orange', fill: true, tension: 0.5, pointRadius: 0
                     }]
                 }
                 , options: getChartOptions('Total Stored Data Over Time', 'Day', 'TiB')
@@ -767,7 +774,7 @@
                 data: {
                     labels: daysLabels, datasets: [{
                         label: 'Dedup Efficiency (%)', data: dedupeEfficiencyOverTime,
-                        borderColor: 'lightgreen', fill: false, tension: 0.3
+                        borderColor: 'lightgreen', fill: false, tension: 0.5, pointRadius: 0
                     }]
                 }
                 , options: getChartOptions('Deduplication & Compression Efficiency Over Time', 'Day', '% Efficiency', 100)
@@ -781,8 +788,8 @@
                 type: 'line',
                 data: {
                     labels: monthLabels, datasets: [{
-                        label: 'Required Keys (KB/32)', data: monthlyKeys,
-                        borderColor: '#8b5cf6', fill: true, tension: 0.3,
+                        label: 'Required Keys', data: monthlyKeys,
+                        borderColor: '#8b5cf6', fill: true, tension: 0.5,
                         backgroundColor: '#b295f444'
                     }]
                 }
@@ -893,11 +900,14 @@
                     labels: daysLabels, datasets: [
                         {
                             label: 'Local (TiB)', data: storedLocallyOverTime,
-                            borderColor: '#4ade80', fill: true, stack: 's'
+                            borderColor: '#4ade80',
+                            fill: origin, stack: 's', tension: 0.5, pointRadius: 0,
+
                         },
                         {
                             label: 'Cloud (TiB)', data: storedInCloudOverTime,
-                            borderColor: '#60a5fa', fill: true, stack: 's'
+                            borderColor: '#60a5fa',
+                            fill: -1, stack: 's', tension: 0.5, pointRadius: 0
                         }
                     ]
                 }
@@ -906,10 +916,48 @@
                 , options: cloudOpts
             }
         );
+        // Chart 6: Block Map Size Over Time
+        window.chart6 = new Chart(
+            document.getElementById('blockMapChart').getContext('2d'),
+            {
+                type: 'line',
+                data: {
+                    labels: daysLabels,
+                    datasets: [{
+                        label: 'Block Map Size (GiB)',
+                        data: blockMapOverTime,
+                        borderColor: '#f59e0b',
+                        fill: true,
+                        tension: 0.5, pointRadius: 0
+                    }]
+                },
+                options: getChartOptions('Block Map Size Over Time', 'Day', 'GiB')
+            }
+        );
+
     }
     //When button is pushed..
     document.getElementById('generateBtn')
         .addEventListener('click', generateCharts);
+    // When button is pushed…
+    document.getElementById('generateBtn')
+        .addEventListener('click', generateCharts);
+
+    // ─── Auto–refresh on input change (2 s debounce) ───
+    ; (function () {
+        let redrawTimer;
+        // Listen on every input or select in your parameters panel
+        const inputs = document.querySelectorAll('#inputs input, #inputs select');
+        inputs.forEach(el => {
+            el.addEventListener('input', () => {
+                clearTimeout(redrawTimer);
+                // wait 2 seconds after the last keystroke before redrawing
+                redrawTimer = setTimeout(() => {
+                    generateCharts();
+                }, 2000);
+            });
+        });
+    })();
 </script>
 </body>
 
