@@ -177,9 +177,21 @@
                     <input type="number" id="cloudDelay" value="5" />
                 </div>
             </fieldset>
-            <button id="generateBtn">Generate Charts</button>
-            <button id="resetBtn" type="button">Reset Inputs</button>
-            <button id="exportCsvBtn" type="button">Export to CSV</button>
+            <div id="controls">
+                <!-- First row: Generate & Reset -->
+                <div class="control-row">
+                    <button id="generateBtn">Generate Charts</button>
+                    <button id="resetBtn" type="button">Reset Inputs</button>
+                </div>
+
+                <!-- Second row: Report Name & Export -->
+                <div class="control-row" style="margin-top:16px;">
+                    <input id="reportName" type="text" placeholder="Server Name" value=""
+                        style="width: 132px; padding:4px; font-size:0.9em;" />
+                    <button id="exportCsvBtn" type="button">Export to CSV</button>
+                </div>
+            </div>
+
         </div>
 
         <!-- Stats Panel -->
@@ -1088,6 +1100,8 @@
 
         // 2️⃣ Grab your data from the last simulation run
         // assume these arrays & stats are in scope or you re–call simulateRetention here
+        // ── A) Grab the report name input ──
+        const reportName = document.getElementById('reportName').value.trim() || 'Report';
         // ── 1) Re-read all your inputs ──
         const sourceSizeTiB = parseFloat(document.getElementById('sourceSize').value);
         const changeRate = parseFloat(document.getElementById('changeRate').value) / 100;
@@ -1121,6 +1135,23 @@
 
         // 3️⃣ Build the CSV rows
         const rows = [];
+        // 1) Report title row
+        rows.push([reportName]);
+        rows.push([]);  // blank line
+
+        //add Recommendations to CSV
+        const currentTier = stats.dictionary.tier;
+        const usedPct = stats.dictionary.usedPct;
+        // find its index in your lookup table
+        const idx = keyLookupTable.findIndex(
+            k => k.Size === currentTier.Size && k.Base_RAM === currentTier.Base_RAM
+        );
+
+        // pick the next-higher tier if ≥90%
+        let recTier = currentTier;
+        if (usedPct >= 90 && idx >= 0 && idx < keyLookupTable.length - 1) {
+            recTier = keyLookupTable[idx + 1];
+        }
 
         // — Summary section —
         rows.push(['Metric', 'Value']);
@@ -1150,7 +1181,19 @@
         rows.push(['Required Keys', stats.dictionary.requiredKeys]);
         rows.push(['Used Keys (%)', stats.dictionary.usedPct.toFixed(2)]);
         rows.push(['Block Map Size (GiB)', stats.blockMapSizeGiB.toFixed(2)]);
+
         rows.push([]); // blank line
+
+        // ── Recommended Configuration ──
+
+        rows.push(['Recommended Configuration', '']);
+        rows.push(['Base RAM', recTier.Base_RAM || 'N/A']);
+        rows.push(['Dict Size', recTier.Size || 'N/A']);
+        rows.push(['Additional RAM', recTier.Additional_RAM || 'N/A']);
+        rows.push(['Shift', recTier.Shift || 'N/A']);
+        rows.push(['Page Shift', recTier.Page_Shift || 'N/A']);
+
+        rows.push([]); // another blank line
 
         // — Daily series header —
         rows.push([
