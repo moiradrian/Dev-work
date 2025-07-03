@@ -257,12 +257,8 @@
             <canvas id="cloudChart"></canvas>
         </div>
         <div class="chart-box">
-            <h3>Meta-Data Size Over Time</h3>
+            <h3>Block Map Size Over Time</h3>
             <canvas id="blockMapChart"></canvas>
-        </div>
-        <div class="chart-box">
-            <h3>Daily New Data: Uncompressed vs Compressed</h3>
-            <canvas id="deltaChart"></canvas>
         </div>
     </div>
 </div>
@@ -305,8 +301,6 @@
         const uncompressedLocalOverTime = [];
         const uncompressedCloudOverTime = [];
         const blockMapOverTime = [];
-        const dailyUncompressedDelta = [];
-        const dailyCompressedDelta = [];
 
         const dailyCut = dailyRetention;                  // 12
         const weeklyCut = dailyCut + weeklyRetention * 7;  // 12 + 4*7  = 40
@@ -325,12 +319,8 @@
 
         // 1️⃣ build backupLog with fixed‐delta growth
         for (let day = 0; day < days; day++) {
-            // = Math.min(1, day / rampUpDays);
-            //const effectiveCompression = compressionPercent * compressionRamp;
-            // apply exactly 10% on the very first snapshot, then use the configured rate thereafter
-            const effectiveCompression = (day === 0)
-                ? 0.10                // always 10% on Day 0
-                : compressionPercent; // user-entered % from Day 1 onward
+            const compressionRamp = Math.min(1, day / rampUpDays);
+            const effectiveCompression = compressionPercent * compressionRamp;
 
             const dedupedSize = day === 0
                 ? sourceSizeTiB
@@ -342,8 +332,7 @@
 
             const compressedSize = dedupedSize * (1 - effectiveCompression);
             const fullCompressedSize = logicalSize * (1 - effectiveCompression);
-            dailyUncompressedDelta.push(dedupedSize);
-            dailyCompressedDelta.push(compressedSize);
+
             lastSnapshot = logicalSize;
 
             const tiers = ['daily'];
@@ -494,14 +483,6 @@
         const storedDataOverTime = storedLocallyOverTime.map(
             (loc, i) => loc + storedInCloudOverTime[i]
         );
-
-        // ── Replace the old totalStorageTiB with the compressed footprint ──
-        const lastLocal = storedLocallyOverTime.at(-1) || 0;
-        const lastCloud = storedInCloudOverTime.at(-1) || 0;
-        stats.totalLocalStoredTiB = lastLocal;
-        stats.totalCloudStoredTiB = lastCloud;
-        stats.totalStoredTiB = lastLocal + lastCloud;
-
         const newTotalUncompressedOverTime = uncompressedLocalOverTime.map(
             (loc, i) => loc + uncompressedCloudOverTime[i]
         );
@@ -523,6 +504,7 @@
         stats.heldRawDataTiB = heldRawDataOverTime.at(-1);
         stats.snapshotsHeld = retainedCountsOverTime.at(-1) || 0;
         stats.totalUncompressedTiB = uncompressedDataOverTime.at(-1) || 0;
+        stats.totalStorageTiB = storedDataOverTime.at(-1) || 0;
         stats.totalCloudTiB = storedInCloudOverTime.at(-1) || 0;
 
 
@@ -576,8 +558,6 @@
             uncompressedCloudOverTime,
             newTotalUncompressedOverTime,
             blockMapOverTime,
-            dailyUncompressedDelta,
-            dailyCompressedDelta,
             stats
         };
     }
@@ -663,7 +643,7 @@
             retainedLogicalOverTime, requiredKeysSeries,
             dictionarySizesOverTime, tierMetaOverTime, heldRawDataOverTime, blockMapOverTime, stats, storedTiB,
             uncompressedDataOverTime, compressedDataOverTime, uncompressedLocalOverTime, uncompressedCloudOverTime,
-            newTotalUncompressedOverTime, dailyUncompressedDelta, dailyCompressedDelta
+            newTotalUncompressedOverTime
         } = simulateRetention(
             days, sourceSizeTiB, changeRate, compressionPct,
             dailyRetention, weeklyRetention, monthlyRetention,
@@ -675,10 +655,6 @@
         stats.dedupePostCompressionPct = dedupeEfficiencyOverTime.at(-1) || 0;
         stats.dedupePreCompressionPct = dedupePreCompressionOverTime.at(-1) || 0;
         stats.totalCompressedTiB = compressedDataOverTime.at(-1) || 0;
-
-        const allDeltas = dailyUncompressedDelta.concat(dailyCompressedDelta);
-        const deltaMax = Math.max(...allDeltas);
-        const deltaMin = Math.min(...allDeltas);
 
 
         //total uncomoressed unique data each day
@@ -740,14 +716,14 @@
         //calculate total stored data
         const finalLocalTiB = storedLocallyOverTime.at(-1);
         const finalCloudTiB = storedInCloudOverTime.at(-1);
-        //stats.totalLocalStoredTiB = finalLocalTiB;
-        //stats.totalCloudStoredTiB = finalCloudTiB;
-        //stats.totalStoredTiB = finalLocalTiB + finalCloudTiB;
+        stats.totalLocalStoredTiB = finalLocalTiB;
+        stats.totalCloudStoredTiB = finalCloudTiB;
+        stats.totalStoredTiB = finalLocalTiB + finalCloudTiB;
 
         // ─── Update Stats Panel ──────────────
         const totLogical = stats.totalLogicalTiB;
         const totUncomp = stats.totalUncompressedTiB;
-        const totStored = stats.totalStoredTiB;
+        const totStored = stats.totalStorageTiB;
         const totCloud = stats.totalCloudTiB;
         const heldRawDataTiB = stats.heldRawDataTiB;
 
@@ -837,9 +813,17 @@
             el.style.color = recColor;
         });
 
+        // Populate the “Recommended Configuration” section
+        //document.getElementById('recKeyTierBase').textContent = recTier.Base_RAM || 'N/A';
+        //document.getElementById('recKeyTierSize').textContent = recTier.Size || 'N/A';
+        //document.getElementById('recKeyTierAddRAM').textContent = recTier.Additional_RAM || 'N/A';
+        //document.getElementById('recKeyTierShift').textContent = recTier.Shift || 'N/A';
+        //document.getElementById('recKeyTierPage').textContent = recTier.Page_Shift || 'N/A';
+
+
         // ─── Render Charts ────────────────────────────
         // destroy old charts - clean for new charts
-        ['chart1', 'chart2', 'chart3', 'chart4', 'chart5', 'chart6', 'chart7'].forEach(id => {
+        ['chart1', 'chart2', 'chart3', 'chart4', 'chart5', 'chart6'].forEach(id => {
             if (window[id] instanceof Chart) window[id].destroy();
         });
 
@@ -1071,49 +1055,6 @@
             }
         );
 
-        // drop the index-0 “Day 0” datapoint since your deltas really start on Day 1
-        const deltaLabels = daysLabels.slice(1);
-        const uncmp = dailyUncompressedDelta.slice(1);
-        const cmp = dailyCompressedDelta.slice(1);
-
-        // compute min/max on your trimmed arrays (optional)
-        const allD = uncmp.concat(cmp);
-        const maxD = Math.max(...allD);
-        const deltaOpts = getChartOptions(
-            'Daily New Data: Uncompressed vs Compressed',
-            'Day',
-            'TiB'
-        );
-        deltaOpts.scales.y.max = maxD * 1.1;
-
-        window.chart7 = new Chart(
-            document.getElementById('deltaChart').getContext('2d'),
-            {
-                type: 'line',
-                data: {
-                    labels: deltaLabels,
-                    datasets: [
-                        {
-                            label: 'Uncompressed Delta Δ (TiB)',
-                            data: uncmp,
-                            borderColor: 'cyan',
-                            tension: 0.5,
-                            pointRadius: 0,
-                            fill: false
-                        },
-                        {
-                            label: 'Compressed Delta Δ (TiB)',
-                            data: cmp,
-                            borderColor: 'magenta',
-                            tension: 0.5,
-                            pointRadius: 0,
-                            fill: false
-                        }
-                    ]
-                },
-                options: deltaOpts
-            }
-        );
     }
     //When button is pushed..
     document.getElementById('generateBtn')
@@ -1215,7 +1156,7 @@
         // — Summary section —
         rows.push(['Metric', 'Value']);
         rows.push(['Total Logical (TiB)', stats.totalLogicalTiB.toFixed(2)]);
-        rows.push(['Total Stored (TiB)', stats.totalStoredTiB.toFixed(2)]);
+        rows.push(['Total Stored (TiB)', stats.totalStorageTiB.toFixed(2)]);
         rows.push(['Total Cloud (TiB)', stats.totalCloudTiB.toFixed(2)]);
         // prefer stats.heldRawDataTiB, but fallback to the last day from the series
         let heldRawTiB = stats.heldRawDataTiB;
