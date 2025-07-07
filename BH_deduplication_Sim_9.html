@@ -323,9 +323,11 @@
 
         let lastSnapshot = sourceSizeTiB;
 
+        // ★ new compressed‐archive accumulator ★
+        let lastCompressedArchive = 0;             // ← initialize before loop
+
         // 1️⃣ build backupLog with fixed‐delta growth
         for (let day = 0; day < days; day++) {
-            // = Math.min(1, day / rampUpDays);
             //const effectiveCompression = compressionPercent * compressionRamp;
             // apply exactly 10% on the very first snapshot, then use the configured rate thereafter
             const effectiveCompression = (day === 0)
@@ -342,6 +344,17 @@
 
             const compressedSize = dedupedSize * (1 - effectiveCompression);
             const fullCompressedSize = logicalSize * (1 - effectiveCompression);
+
+            // ↓↓↓  COMPOUND THE COMPRESSED DELTA INTO A RUNNING TOTAL ↓↓↓
+            if (day === 0) {
+                lastCompressedArchive = fullCompressedSize;
+            } else {
+                lastCompressedArchive += compressedSize;
+            }
+            compressedDataOverTime.push(lastCompressedArchive);
+            // ↑↑↑
+
+            //daily bookkeeping
             dailyUncompressedDelta.push(dedupedSize);
             dailyCompressedDelta.push(compressedSize);
             lastSnapshot = logicalSize;
@@ -434,7 +447,17 @@
             // storedDataOverTime.push(totalCompressed);
             storedLocallyOverTime.push(localSum);
             storedInCloudOverTime.push(cloudSum);
+            //compressedDataOverTime.push(totalCompressed);
+
+            // look up yesterday’s running total (or zero on Day 0)
+            const prevCompounded = currentDay > 0
+                ? compressedDataOverTime[currentDay - 1]
+                : 0;
+            // add today’s compressed delta
+            const compounded = prevCompounded + totalCompressed;
+            compressedDataOverTime.push(compounded);
             compressedDataOverTime.push(totalCompressed);
+    
             uncompressedLocalOverTime.push(uncompressedLocal);
             uncompressedCloudOverTime.push(uncompressedCloud);
 
@@ -450,8 +473,6 @@
             // actual stored = local + cloud
             const stored = localSum + cloudSum;
 
-            // For efficienccy we want the single-copy compressed footprint:
-            const compressedStored = totalCompressed;
 
             // post‐compression dedupe = (rawHeld – stored) / rawHeld × 100
             const postEff = rawHeld > 0
