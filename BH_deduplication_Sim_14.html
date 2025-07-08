@@ -176,6 +176,10 @@
                     <label for="cloudDelay">9. Days Before Data Moves to Cloud</label>
                     <input type="number" id="cloudDelay" value="5" />
                 </div>
+                <div class="input-group">
+                    <label for="initialCompression">10. Initial Backup compression (%)</label>
+                    <input type="number" id="initialCompression" value="10" step="1" />
+                </div>
             </fieldset>
             <div id="controls">
                 <!-- First row: Generate & Reset -->
@@ -205,6 +209,7 @@
             <p><strong>Deduplication Pre-Compression:</strong> <span id="dedupePreCompression">-</span>%</p>
             <p><strong>Deduplication Post-Compression:</strong> <span id="finalEfficiency">-</span>%</p>
             <p><strong>Total Cloud Data:</strong> <span id="totalCloud">-</span>TiB</p>
+            <p><strong>Total Local Data:</strong> <span id="totalLocal">-</span>TiB</p>
         </div>
         <div class="column" id="dict">
             <h1>Dictionary & Meta-Data</h1>
@@ -283,95 +288,93 @@
     ];
 
     /**
- * Simulate dedupe + compression + retention + local/cloud split
- *
- * days                – total days to simulate (e.g. simMonths * 30)
- * sourceSizeTiB       – initial full backup size (TiB)
- * changeRate          – fractional daily change (e.g. 0.02 for 2%)
- * compressionPercent  – fractional compression rate (e.g. 0.50 for 50%)
- * dailyRetention      – how many days to keep daily deltas
- * weeklyRetention     – how many weekly snapshots to keep
- * monthlyRetention    – how many monthly snapshots to keep
- * yearlyRetention     – how many yearly snapshots to keep
- * cloudDelay          – days before a snapshot “graduates” from local to cloud
+    * Simulate dedupe + compression + retention + local/cloud split
+    *
+    * days                – total days to simulate (e.g. simMonths * 30)
+    * sourceSizeTiB       – initial full backup size (TiB)
+    * changeRate          – fractional daily change (e.g. 0.02 for 2%)
+    * compressionPercent  – fractional compression rate (e.g. 0.50 for 50%)
+    * dailyRetention      – how many days to keep daily deltas
+    * weeklyRetention     – how many weekly snapshots to keep
+    * monthlyRetention    – how many monthly snapshots to keep
+    * yearlyRetention     – how many yearly snapshots to keep
+    * cloudDelay          – days before a snapshot “graduates” from local to cloud
+    * Initial Backup Compression - compression simulation entry for first backup reduction
  */
     function simulateRetention(
-        days,
-        sourceSizeTiB,
-        changeRate,
-        compressionPercent,
-        dailyRetention,
-        weeklyRetention,
-        monthlyRetention,
-        yearlyRetention,
-        cloudDelay
+        days, sourceSizeTiB, changeRate, compressionPercent,
+        dailyRetention, weeklyRetention, monthlyRetention,
+        yearlyRetention, cloudDelay, initialCompression
     ) {
-        // ── 0) Prep our arrays & retention cutoffs ────────────────────────────────
-        const backupLog = [];
-        const storedLocallyOverTime = [];
-        const storedInCloudOverTime = [];
-        const dedupeEfficiencyOverTime = [];
+        // ── set up ─────────────────────────────────────────────
+        const backupLog = [];                 // will hold every day’s snapshot metadata
+        const storedLocallyOverTime = [];     // TiB stored locally after retention
+        const storedInCloudOverTime = [];     // TiB in cloud after retention
+        const dedupeEfficiencyOverTime = [];  // post-compression dedupe %
         const dedupePreCompressionOverTime = [];
-        const retainedCountsOverTime = [];
-        const blockMapOverTime = [];
-        const compressedDataOverTime = [];
+        const retainedCountsOverTime = [];    // # snapshots kept
+        const compressedDataOverTime = [];    // total compressed bytes after retention
         const uncompressedLocalOverTime = [];
         const uncompressedCloudOverTime = [];
-        const dailyUncompressedDelta = [];
-        const dailyCompressedDelta = [];
-        // we'll fill these later (they drive your monthly charts & CSV):
+        const blockMapOverTime = [];
         const requiredKeysSeries = [];
         const dictionarySizesOverTime = [];
         const tierMetaOverTime = [];
+        const newTotalUncompressedOverTime = [];
 
+        // for delta-charts
+        const dailyUncompressedDelta = [];
+        const dailyCompressedDelta = [];
+
+        // build your cutoff windows
         const dailyCut = dailyRetention;
         const weeklyCut = dailyCut + weeklyRetention * 7;
         const monthlyCut = weeklyCut + monthlyRetention * 30;
         const yearlyCut = monthlyCut + yearlyRetention * 365;
 
-        // ── 1) Build a log of every snapshot (with its delta + tiers) ────────────
-        let lastSnapshotTiB = sourceSizeTiB;
-        let lastCompressedTotal = 0;
+        // running accumulators
+        let lastSnapshotTiB = sourceSizeTiB;  // logical (pre-delta) running total
+        let lastCompressedArchive = 0;              // (we’ll build day-0 below)
 
+        // ── 1️⃣ build a log of every full snapshot (delta + tiers) ─────────────
         for (let day = 0; day < days; day++) {
-            // 1️⃣ pick 10% on day-0, then user’s % thereafter
-            const effectiveCompression = day === 0
-                ? 0.10
+            // apply 10% on day 0, user‐pct thereafter
+            const effectiveCompression = (day === 0)
+                ? initialCompression
                 : compressionPercent;
 
-            // 2️⃣ compound today’s delta off *last* snapshot
-            const deltaTiB = day === 0
+            // dedupe delta: day 0 = full, days >0 = `changeRate` of original
+            const deltaTiB = (day === 0)
                 ? sourceSizeTiB
                 : sourceSizeTiB * changeRate;
 
-            // 3️⃣ new logical total
-            const logicalTiB = day === 0
+            // new logical total = previous + today's delta
+            const logicalTiB = (day === 0)
                 ? sourceSizeTiB
                 : lastSnapshotTiB + deltaTiB;
 
-            // 4️⃣ compress just today’s delta vs. the full archive
+            // compressed bytes of _this delta_ and of the entire archive
             const compressedDeltaTiB = deltaTiB * (1 - effectiveCompression);
             const fullCompressedTiB = logicalTiB * (1 - effectiveCompression);
 
-            // 5️⃣ keep a running “archive size” for quick reference
-            lastCompressedTotal = day === 0
+            // compound the compressed‐archive running total
+            lastCompressedArchive = (day === 0)
                 ? fullCompressedTiB
-                : lastCompressedTotal + compressedDeltaTiB;
+                : lastCompressedArchive + compressedDeltaTiB;
 
-            // 6️⃣ stash for your delta chart
+            // stash for your “delta” chart
             dailyUncompressedDelta.push(deltaTiB);
             dailyCompressedDelta.push(compressedDeltaTiB);
 
-            // 7️⃣ advance for next iteration
+            // remember to advance your snapshot total
             lastSnapshotTiB = logicalTiB;
 
-            // 8️⃣ tag which tiers this snapshot belongs to
+            // assign retention tiers
             const tiers = ['daily'];
             if (day % 7 === 0) tiers.push('weekly');
             if (day % 30 === 0) tiers.push('monthly');
             if (day % 365 === 0) tiers.push('yearly');
 
-            // 9️⃣ record everything
             backupLog.push({
                 day,
                 deltaTiB,
@@ -382,11 +385,11 @@
             });
         }
 
-        // ── 2) Walk “today” and apply retention + local/cloud split ───────────────
+        // ── 2️⃣ walk through each “today” and apply retention + local/cloud split ────
         for (let today = 0; today < days; today++) {
             let keptCount = 0;
-            let sumUncompressed = 0;
-            let sumCompressed = 0;
+            let sumCompressed = 0;  // sum of compressed bytes for snapshots we KEEP
+            let sumUncompress = 0;  // sum of raw-deltas  ”     “
             let localCompTiB = 0;
             let cloudCompTiB = 0;
             let localUncompTiB = 0;
@@ -394,37 +397,52 @@
 
             for (const snap of backupLog) {
                 const age = today - snap.day;
-                if (age < 0) continue; // future
+                if (age < 0) continue;  // future
 
-                // 🛑 apply daily/weekly/monthly/yearly retention
-                const keep = (age < dailyCut)
+                // should we keep it?
+                const keep =
+                    (age < dailyCut)
                     || (age >= dailyCut && age < weeklyCut && snap.tiers.includes('weekly'))
                     || (age >= weeklyCut && age < monthlyCut && snap.tiers.includes('monthly'))
                     || (age >= monthlyCut && age < yearlyCut && snap.tiers.includes('yearly'));
+
                 if (!keep) continue;
 
                 keptCount++;
-                sumUncompressed += snap.deltaTiB;
+                // accumulate raw delta
+                sumUncompress += snap.deltaTiB;
 
-                // day-0 uses fullArchive, others just today’s delta
                 const cTiB = (snap.day === 0)
                     ? snap.fullCompressedTiB
                     : snap.compressedDeltaTiB;
+
                 sumCompressed += cTiB;
 
-                // ◀ split into local vs cloud strictly by age ▶
-                if (age < cloudDelay) {
-                    // still local until it “ages out”
+                // 1) Day-0 full backup always stays local, and *also* gets copied at cloudDelay
+                if (snap.day === 0) {
+                    // always count it locally
                     localUncompTiB += snap.deltaTiB;
-                    localCompTiB   += cTiB;
+                    localCompTiB += snap.fullCompressedTiB;
+
+                    // once it ages to cloudDelay, you copy it (but do NOT remove it locally)
+                    if (age >= cloudDelay) {
+                        cloudUncompTiB += snap.deltaTiB;
+                        cloudCompTiB += snap.fullCompressedTiB;
+                    }
+
+                    // 2) For snapshots 1…N, deltas live locally for cloudDelay days…
+                } else if (age < cloudDelay) {
+                    localUncompTiB += snap.deltaTiB;
+                    localCompTiB += snap.compressedDeltaTiB;
+
+                    // 3) …and then move into the cloud thereafter
                 } else {
-                    // once it hits the delay, it lives in the cloud
                     cloudUncompTiB += snap.deltaTiB;
-                    cloudCompTiB   += cTiB;
+                    cloudCompTiB += snap.compressedDeltaTiB;
                 }
             }
 
-            // 📈 push day-by-day series
+            // push per-day series
             retainedCountsOverTime.push(keptCount);
             compressedDataOverTime.push(sumCompressed);
             uncompressedLocalOverTime.push(localUncompTiB);
@@ -432,143 +450,104 @@
             storedLocallyOverTime.push(localCompTiB);
             storedInCloudOverTime.push(cloudCompTiB);
 
-            // ➕ block-map (rawHeld × 3 GiB/TiB)
-            blockMapOverTime.push((sourceSizeTiB * keptCount) * 3);
+            // 1) rawHeld = full-backup size × # snapshots kept
+            const rawHeld = sourceSizeTiB * keptCount;
 
-            // 📊 dedupe efficiencies
-            const rawHeld = sourceSizeTiB * sumUncompressed;
+            // 2) Pre-compression dedupe: (rawHeld – sumUncompress) / rawHeld
+            const prePct = rawHeld > 0
+                ? ((rawHeld - sumUncompress) / rawHeld) * 100
+                : 0;
 
-            /* console.log(
-                `Day ${today}: kept=${keptCount}, ` +
-                `rawHeld=${rawHeld.toFixed(2)}TiB, ` +
-                `sumCompressed=${sumCompressed.toFixed(2)}TiB`
+            // 3) Post-compression dedupe: (rawHeld – sumCompressed) / rawHeld
+            const postPct = rawHeld > 0
+                ? ((rawHeld - sumCompressed) / rawHeld) * 100
+                : 0;
+
+            /* // 4) Debug log
+            console.log(
+                `Day ${today}: rawHeld=${rawHeld.toFixed(2)}TiB, ` +
+                `sumUncomp=${sumUncompress.toFixed(2)}TiB, ` +
+                `sumComp=${sumCompressed.toFixed(2)}TiB, ` +
+                `preEff=${prePct.toFixed(2)}%, postEff=${postPct.toFixed(2)}%`
             ); */
 
 
-            const postEff = rawHeld > 0
-                ? ((rawHeld - sumCompressed) / rawHeld) * 100
-                : 0;
-            const preEff = rawHeld > 0
-                ? ((rawHeld - sumUncompressed) / rawHeld) * 100
-                : 0;
-            dedupeEfficiencyOverTime.push(Math.max(0, postEff));
-            dedupePreCompressionOverTime.push(Math.max(0, preEff));
-            // ─── LOG THE LAST 5 DAYS ───────────────────────────────
-            if (today >= days - 5) {
-                console.log(
-                    `Tail Day ${today}: kept=${keptCount}, ` +
-                    `sumCompressed=${sumCompressed.toFixed(2)}, ` +
-                    `localComp=${localCompTiB.toFixed(2)}, ` +
-                    `cloudComp=${cloudCompTiB.toFixed(2)}, ` +
-                    `sumUncompress=${sumUncompressed.toFixed(2)}`
-                );
-            }
-        }
-        // added for massive number issue ---------------
-        console.log('▶️ After retention loop:');
-        console.table({
-            dayCount: days,
-            storedLocal_len: storedLocallyOverTime.length,
-            storedCloud_len: storedInCloudOverTime.length,
-            compressed_len: compressedDataOverTime.length,
-            uncompressed_len: uncompressedLocalOverTime.length,
-        });
-        console.log('storedLocallyOverTime (first 10):', storedLocallyOverTime.slice(0, 10));
-        console.log('storedInCloudOverTime (first 10):', storedInCloudOverTime.slice(0, 10));
-        console.log('compressedDataOverTime (first 10):', compressedDataOverTime.slice(0, 10));
-        console.log('uncompressedLocalOverTime (first 10):', uncompressedLocalOverTime.slice(0, 10));
+            dedupePreCompressionOverTime.push(Math.max(0, prePct));
+            dedupeEfficiencyOverTime.push(Math.max(0, postPct));
 
-        //end of consol log for massive number issue -----------------
+            // block-map size = rawHeldTiB × 3 GiB per TiB (as before)
+            blockMapOverTime.push((sourceSizeTiB * keptCount) * 3);
 
-        // ── 3) Build any combined series your charts need ─────────────────────────
-        const storedDataOverTime = storedLocallyOverTime.map(
-            (loc, i) => loc + storedInCloudOverTime[i]
-        );
-        const uncompressedDataOverTime = uncompressedLocalOverTime.map(
-            (loc, i) => loc + uncompressedCloudOverTime[i]
-        );
-
-        // ── 4) Keys & dictionary sizing at the end of each day ───────────────────
-        // (re-run through your retention arrays to compute requiredKeysSeries, etc.)
-        for (let i = 0; i < days; i++) {
-            // number of keys = floor( footprintTiB × (1024^3) / 8 )
-            const footprintTiB = storedLocallyOverTime[i] + storedInCloudOverTime[i];
+            // compute & push daily key requirements:
+            const footprintTiB = localCompTiB + cloudCompTiB;
             const numKeys = Math.floor(footprintTiB * (1024 ** 3) / 8);
             requiredKeysSeries.push(numKeys);
 
-            const tier = keyLookupTable.find(
+            // look up its tier
+            const match = keyLookupTable.find(
                 k => numKeys >= k.min && numKeys <= k.max
             ) || {};
-            tierMetaOverTime.push(tier);
-            dictionarySizesOverTime.push(tier.Size || 'N/A');
+            dictionarySizesOverTime.push(match.Size || 'N/A');
+            tierMetaOverTime.push(match);
         }
-        // final “dictionary” summary
-        const finalKeys = requiredKeysSeries.at(-1) || 0;
-        const finalTier = tierMetaOverTime.at(-1) || { max: 0, Size: 'N/A', Base_RAM: 'N/A', Additional_RAM: 'N/A', Shift: 'N/A', Page_Shift: 'N/A' };
-        const usedPct = finalTier.max ? (finalKeys / finalTier.max) * 100 : 0;
-        // ── 5) Final stats object ───────────────────────────────────────────────
+        // ── 3️⃣ after the retention build your total-uncompressed series ─────────
+        // combine local+cloud raw deltas into one series:
+        for (let i = 0; i < uncompressedLocalOverTime.length; i++) {
+            newTotalUncompressedOverTime.push(
+                uncompressedLocalOverTime[i]
+                + uncompressedCloudOverTime[i]
+            );
+        }
+
+        // ── 3️⃣ assemble final stats & return all series ─────────────────────────────
         const stats = {
             totalLogicalTiB: sourceSizeTiB * days,
             heldRawDataTiB: sourceSizeTiB * retainedCountsOverTime.at(-1),
             snapshotsHeld: retainedCountsOverTime.at(-1),
-            totalUncompressedTiB: (uncompressedLocalOverTime.at(-1) || 0)
-                + (uncompressedCloudOverTime.at(-1) || 0),
-            totalLocalStoredTiB: storedLocallyOverTime.at(-1) || 0,
-            totalCloudTiB: storedInCloudOverTime.at(-1) || 0,      // <-- name matches UI
-            totalStoredTiB: (storedLocallyOverTime.at(-1) || 0)
-                + (storedInCloudOverTime.at(-1) || 0),
-            dedupePreCompressionPct: dedupePreCompressionOverTime.at(-1) || 0,
-            dedupePostCompressionPct: dedupeEfficiencyOverTime.at(-1) || 0,
-            totalCompressedTiB: compressedDataOverTime.at(-1) || 0,
-            blockMapSizeGiB: blockMapOverTime.at(-1) || 0,
-            dictionary: {
-                requiredKeys: finalKeys,
-                tier: finalTier,
-                usedPct
-            }
+            totalUncompressedTiB: uncompressedLocalOverTime.at(-1) + uncompressedCloudOverTime.at(-1),
+            totalLocalStoredTiB: storedLocallyOverTime.at(-1),
+            totalCloudStoredTiB: storedInCloudOverTime.at(-1),
+            totalStoredTiB: storedLocallyOverTime.at(-1) + storedInCloudOverTime.at(-1),
+            dedupePreCompressionPct: dedupePreCompressionOverTime.at(-1),
+            dedupePostCompressionPct: dedupeEfficiencyOverTime.at(-1),
+            totalCompressedTiB: compressedDataOverTime.at(-1)
         };
-        const heldRawDataOverTime = retainedCountsOverTime.map(
-            count => sourceSizeTiB * count
-        );
-        const newTotalUncompressedOverTime = uncompressedDataOverTime;
 
-        console.log('▶️ Final stats:', stats);
-        console.log('▶️ storedDataOverTime (first 10):', storedDataOverTime.slice(0, 10));
-        console.log('▶️ newTotalUncompressedOverTime (first 10):', newTotalUncompressedOverTime.slice(0, 10));
+        // final dictionary stats
+        const finalKeys = requiredKeysSeries.at(-1) || 0;
+        const finalTier = tierMetaOverTime.at(-1) || { max: 0, Size: 'N/A', Base_RAM: 'N/A', Additional_RAM: 'N/A', Shift: 'N/A', Page_Shift: 'N/A' };
+        const usedPct = finalTier.max
+            ? (finalKeys / finalTier.max) * 100
+            : 0;
 
-        console.log('=== SERIES TAILS ===');
-        console.log('storedLocallyOverTime (last 10):', storedLocallyOverTime.slice(-10));
-        console.log('storedInCloudOverTime  (last 10):', storedInCloudOverTime.slice(-10));
-        console.log('compressedDataOverTime  (last 10):', compressedDataOverTime.slice(-10));
-        console.log('uncompressedLocalOverTime (last 10):', uncompressedLocalOverTime.slice(-10));
-        console.log('uncompressedCloudOverTime  (last 10):', uncompressedCloudOverTime.slice(-10));
-        console.log('FINAL stats:', stats);
+        stats.dictionary = {
+            requiredKeys: finalKeys,
+            tier: finalTier,
+            usedPct
+        };
 
         return {
-            // for your charts
-            storedDataOverTime, //combined local+cloud
-            storedLocallyOverTime,
+            // time-series
             storedLocallyOverTime,
             storedInCloudOverTime,
-            uncompressedDataOverTime,
             compressedDataOverTime,
             dedupeEfficiencyOverTime,
             dedupePreCompressionOverTime,
-            retainedLogicalOverTime: retainedCountsOverTime,
-            heldRawDataOverTime,                // ← the raw‐held series
+            retainedCountsOverTime,
+            blockMapOverTime,
             dailyUncompressedDelta,
             dailyCompressedDelta,
             uncompressedLocalOverTime,
             uncompressedCloudOverTime,
-            blockMapOverTime,
             requiredKeysSeries,
             dictionarySizesOverTime,
             tierMetaOverTime,
-            newTotalUncompressedOverTime,      // ← alias for uncompressedDataOverTime
+            newTotalUncompressedOverTime,
+
+            // final stats object
             stats
         };
     }
-
 
     /**
      * Returns a standard Chart.js options object
@@ -638,6 +617,7 @@
         const simMonths = parseInt(document.getElementById('simulationMonths').value, 10);
         const compressionPct = parseFloat(document.getElementById('compression').value) / 100;
         const cloudDelay = parseInt(document.getElementById('cloudDelay').value, 10);
+        const initialCompression = parseFloat(document.getElementById('initialCompression').value) / 100;
 
         const days = simMonths * 30;
         const daysLabels = Array.from({ length: days }, (_, i) => `Day ${i + 1}`);
@@ -653,19 +633,9 @@
         } = simulateRetention(
             days, sourceSizeTiB, changeRate, compressionPct,
             dailyRetention, weeklyRetention, monthlyRetention,
-            yearlyRetention, cloudDelay
+            yearlyRetention, cloudDelay, initialCompression
         );
         //End of Simulation call.
-
-        console.log('—— simulateRetention returned ——');
-        console.log({
-            storedLocallyOverTime,
-            storedInCloudOverTime,
-            compressedDataOverTime,
-            uncompressedLocalOverTime,
-            uncompressedCloudOverTime,
-            stats
-        });
 
         // Create Stats from retention time series
         stats.dedupePostCompressionPct = dedupeEfficiencyOverTime.at(-1) || 0;
@@ -723,7 +693,7 @@
             return tierMetaOverTime[idx] || {};
         });
 
-        // Logging to check values - comment out if not required
+        /* // Logging to check values - comment out if not required
         console.log({
             daysCount,
             lastIdx,
@@ -731,20 +701,17 @@
             monthlyKeys,
             lastRequiredKey: requiredKeysSeries[lastIdx],
             lastMonthlyKey: monthlyKeys[monthlyKeys.length - 1]
-        });
+        }); */
 
         //calculate total stored data
         const finalLocalTiB = storedLocallyOverTime.at(-1);
         const finalCloudTiB = storedInCloudOverTime.at(-1);
-        //stats.totalLocalStoredTiB = finalLocalTiB;
-        //stats.totalCloudStoredTiB = finalCloudTiB;
-        //stats.totalStoredTiB = finalLocalTiB + finalCloudTiB;
 
         // ─── Update Stats Panel ──────────────
         const totLogical = stats.totalLogicalTiB;
         const totUncomp = stats.totalUncompressedTiB;
         const totStored = stats.totalStoredTiB;
-        const totCloud = stats.totalCloudTiB
+        const totCloud = stats.totalCloudStoredTiB;
         const heldRawDataTiB = stats.heldRawDataTiB;
 
         //document.getElementById('totalRawDataTiB').textContent = totLogical.toFixed(2);
@@ -762,6 +729,11 @@
             maximumFractionDigits: 2
         });
         document.getElementById('totalCloud').textContent = totCloud.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+        // Update “Total Local Stored”:
+        document.getElementById('totalLocal').textContent = finalLocalTiB.toLocaleString(undefined, {
             minimumFractionDigits: 2,
             maximumFractionDigits: 2
         });
@@ -1033,10 +1005,11 @@
             }
         };
 
-        // …right before window.chart5 = new Chart(…)
-        //console.log('Day labels:', daysLabels);
-        //console.log('Local series:', storedLocallyOverTime);
-        //console.log('Cloud series:', storedInCloudOverTime);
+        /* // debug chart 5 right before window.chart5 = new Chart(…)
+        console.log('Day labels:', daysLabels);
+        console.log('Local series:', storedLocallyOverTime);
+        console.log('Cloud series:', storedInCloudOverTime);
+        */
 
 
         // Chart 5: Local vs Cloud
@@ -1127,9 +1100,12 @@
             }
         );
     }
-    //When button is pushed..
+    //When Generate Charts button is pushed..
     document.getElementById('generateBtn')
-        .addEventListener('click', generateCharts);
+        .addEventListener('click', () => {
+            //return instantly...
+            setTimeout(generateCharts,0);
+        });
 
     // When reset button is pushed…
     // Reset all inputs back to their original defaults, then redraw
@@ -1161,7 +1137,7 @@
             });
         });
     })();
-    // 1️⃣ Hook up the Export button
+    // 1️⃣ Hook up the Export CSV button
     document.getElementById('exportCsvBtn')
         .addEventListener('click', exportCsv);
 
@@ -1182,6 +1158,7 @@
         const yearlyRetention = parseInt(document.getElementById('yearlyRetention').value, 10);
         const compressionPct = parseFloat(document.getElementById('compression').value) / 100;
         const cloudDelay = parseInt(document.getElementById('cloudDelay').value, 10);
+        const initialCompression = parseFloat(document.getElementById('initialCompression').value) / 100;
 
         const simMonths = parseInt(document.getElementById('simulationMonths').value, 10);
         const days = simMonths * 30;    // exactly as in generateCharts()
@@ -1201,7 +1178,7 @@
             stats } = simulateRetention(
                 days, sourceSizeTiB, changeRate, compressionPct,
                 dailyRetention, weeklyRetention, monthlyRetention,
-                yearlyRetention, cloudDelay
+                yearlyRetention, cloudDelay, initialCompression
             );
 
         // 3️⃣ Build the CSV rows
@@ -1209,6 +1186,20 @@
         // 1) Report title row
         rows.push([reportName]);
         rows.push([]);  // blank line
+
+        // - Input Variables section -
+
+        rows.push(['Input Parameter', 'Value']);
+        rows.push(['Source Data Size (TiB)', sourceSizeTiB]);
+        rows.push(['Change Rate (%)', (changeRate * 100).toFixed(2)]);
+        rows.push(['Daily Retention (days)', dailyRetention]);
+        rows.push(['Weekly Retention (count)', weeklyRetention]);
+        rows.push(['Monthly Retention (count)', monthlyRetention]);
+        rows.push(['Yearly Retention (count)', yearlyRetention]);
+        rows.push(['Simulation Time (months)', simMonths]);
+        rows.push(['Compression Savings (%)', (compressionPct * 100).toFixed(2)]);
+        rows.push(['Days Before Data Moves to Cloud', cloudDelay]);
+        rows.push(['Initial Backup Compression (%)', (initialCompression * 100).toFixed(2)]);
 
         //add Recommendations to CSV
         const currentTier = stats.dictionary.tier;
@@ -1225,10 +1216,12 @@
         }
 
         // — Summary section —
-        rows.push(['Metric', 'Value']);
+        rows.push([]);
+        rows.push(['Results', 'Value']);
         rows.push(['Total Logical (TiB)', stats.totalLogicalTiB.toFixed(2)]);
         rows.push(['Total Stored (TiB)', stats.totalStoredTiB.toFixed(2)]);
-        rows.push(['Total Cloud (TiB)', stats.totalCloudTiB.toFixed(2)]);
+        rows.push(['Total Cloud (TiB)', stats.totalCloudStoredTiB.toFixed(2)]);
+
         // prefer stats.heldRawDataTiB, but fallback to the last day from the series
         let heldRawTiB = stats.heldRawDataTiB;
         if (heldRawTiB === undefined || isNaN(heldRawTiB)) {
@@ -1251,7 +1244,9 @@
 
         rows.push(['Required Keys', stats.dictionary.requiredKeys]);
         rows.push(['Used Keys (%)', stats.dictionary.usedPct.toFixed(2)]);
-        rows.push(['Block Map Size (GiB)', stats.blockMapSizeGiB.toFixed(2)]);
+
+        const lastBm = blockMapOverTime.at(-1) || 0;
+        rows.push(['Block Map Size (GiB)', lastBm.toFixed(2)]);
 
         rows.push([]); // blank line
 
