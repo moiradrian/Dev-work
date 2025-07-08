@@ -944,12 +944,20 @@
                             const meta = isRec
                                 ? monthlyRecMeta[idx]
                                 : monthlyMeta[idx];
+                            // lookup required keys at this month:
+                            const usedKeys = monthlyKeys[idx] || 0;
+                            // calculate used-% against this tier’s max:
+                            const usedPct = meta.max
+                                ? (usedKeys / meta.max) * 100
+                                : 0;
+
                             return [
                                 `Size: ${meta.Size || "N/A"}`,
                                 `Base RAM: ${meta.Base_RAM || "N/A"}`,
                                 `Additional RAM: ${meta.Additional_RAM || "N/A"}`,
                                 `Shift: ${meta.Shift || "N/A"}`,
-                                `Page Shift: ${meta.Page_Shift || "N/A"}`
+                                `Page Shift: ${meta.Page_Shift || "N/A"}`,
+                                `Used Keys: ${usedKeys.toLocaleString()} (${usedPct.toFixed(2)}%)`
                             ];
                         }
                     }
@@ -1004,7 +1012,7 @@
                     fill: false,
                     stepped: true
                 }
-            ]
+                ]
             },
             options: baseOpts4
         });
