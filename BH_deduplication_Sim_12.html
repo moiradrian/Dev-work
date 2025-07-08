@@ -176,6 +176,10 @@
                     <label for="cloudDelay">9. Days Before Data Moves to Cloud</label>
                     <input type="number" id="cloudDelay" value="5" />
                 </div>
+                <div class="input-group">
+                    <label for="initialCompression">10. Initial Backup compression (%)</label>
+                    <input type="number" id="initialCompression" value="10" step="1" />
+                </div>
             </fieldset>
             <div id="controls">
                 <!-- First row: Generate & Reset -->
@@ -205,6 +209,7 @@
             <p><strong>Deduplication Pre-Compression:</strong> <span id="dedupePreCompression">-</span>%</p>
             <p><strong>Deduplication Post-Compression:</strong> <span id="finalEfficiency">-</span>%</p>
             <p><strong>Total Cloud Data:</strong> <span id="totalCloud">-</span>TiB</p>
+            <p><strong>Total Local Data:</strong> <span id="totalLocal">-</span>TiB</p>
         </div>
         <div class="column" id="dict">
             <h1>Dictionary & Meta-Data</h1>
@@ -283,22 +288,23 @@
     ];
 
     /**
- * Simulate dedupe + compression + retention + local/cloud split
- *
- * days                – total days to simulate (e.g. simMonths * 30)
- * sourceSizeTiB       – initial full backup size (TiB)
- * changeRate          – fractional daily change (e.g. 0.02 for 2%)
- * compressionPercent  – fractional compression rate (e.g. 0.50 for 50%)
- * dailyRetention      – how many days to keep daily deltas
- * weeklyRetention     – how many weekly snapshots to keep
- * monthlyRetention    – how many monthly snapshots to keep
- * yearlyRetention     – how many yearly snapshots to keep
- * cloudDelay          – days before a snapshot “graduates” from local to cloud
+    * Simulate dedupe + compression + retention + local/cloud split
+    *
+    * days                – total days to simulate (e.g. simMonths * 30)
+    * sourceSizeTiB       – initial full backup size (TiB)
+    * changeRate          – fractional daily change (e.g. 0.02 for 2%)
+    * compressionPercent  – fractional compression rate (e.g. 0.50 for 50%)
+    * dailyRetention      – how many days to keep daily deltas
+    * weeklyRetention     – how many weekly snapshots to keep
+    * monthlyRetention    – how many monthly snapshots to keep
+    * yearlyRetention     – how many yearly snapshots to keep
+    * cloudDelay          – days before a snapshot “graduates” from local to cloud
+    * Initial Backup Compression - compression simulation entry for first backup reduction
  */
     function simulateRetention(
         days, sourceSizeTiB, changeRate, compressionPercent,
         dailyRetention, weeklyRetention, monthlyRetention,
-        yearlyRetention, cloudDelay
+        yearlyRetention, cloudDelay, initialCompression
     ) {
         // ── set up ─────────────────────────────────────────────
         const backupLog = [];                 // will hold every day’s snapshot metadata
@@ -334,7 +340,7 @@
         for (let day = 0; day < days; day++) {
             // apply 10% on day 0, user‐pct thereafter
             const effectiveCompression = (day === 0)
-                ? 0.10
+                ? initialCompression
                 : compressionPercent;
 
             // dedupe delta: day 0 = full, days >0 = `changeRate` of original
@@ -406,23 +412,33 @@
                 // accumulate raw delta
                 sumUncompress += snap.deltaTiB;
 
-                // which “copy” of the compressed snapshot do we count?
-                // day 0 uses fullCompressedTiB; others use compressedDeltaTiB
                 const cTiB = (snap.day === 0)
                     ? snap.fullCompressedTiB
                     : snap.compressedDeltaTiB;
 
                 sumCompressed += cTiB;
 
-                // day 0 always stays local + everything younger than delay stays local
-                if (snap.day === 0 || age < cloudDelay) {
+                // 1) Day-0 full backup always stays local, and *also* gets copied at cloudDelay
+                if (snap.day === 0) {
+                    // always count it locally
                     localUncompTiB += snap.deltaTiB;
-                    localCompTiB += cTiB;
-                }
-                // anything at or beyond the delay also lives in cloud (i.e. copy day 0 too)
-                if (age >= cloudDelay) {
+                    localCompTiB += snap.fullCompressedTiB;
+
+                    // once it ages to cloudDelay, you copy it (but do NOT remove it locally)
+                    if (age >= cloudDelay) {
+                        cloudUncompTiB += snap.deltaTiB;
+                        cloudCompTiB += snap.fullCompressedTiB;
+                    }
+
+                    // 2) For snapshots 1…N, deltas live locally for cloudDelay days…
+                } else if (age < cloudDelay) {
+                    localUncompTiB += snap.deltaTiB;
+                    localCompTiB += snap.compressedDeltaTiB;
+
+                    // 3) …and then move into the cloud thereafter
+                } else {
                     cloudUncompTiB += snap.deltaTiB;
-                    cloudCompTiB += cTiB;
+                    cloudCompTiB += snap.compressedDeltaTiB;
                 }
             }
 
@@ -434,16 +450,30 @@
             storedLocallyOverTime.push(localCompTiB);
             storedInCloudOverTime.push(cloudCompTiB);
 
-            // dedupe efficiencies
+            // 1) rawHeld = full-backup size × # snapshots kept
             const rawHeld = sourceSizeTiB * keptCount;
-            const postEff = rawHeld > 0
-                ? ((rawHeld - sumCompressed) / rawHeld) * 100
-                : 0;
-            const preEff = rawHeld > 0
+
+            // 2) Pre-compression dedupe: (rawHeld – sumUncompress) / rawHeld
+            const prePct = rawHeld > 0
                 ? ((rawHeld - sumUncompress) / rawHeld) * 100
                 : 0;
-            dedupeEfficiencyOverTime.push(Math.max(0, postEff));
-            dedupePreCompressionOverTime.push(Math.max(0, preEff));
+
+            // 3) Post-compression dedupe: (rawHeld – sumCompressed) / rawHeld
+            const postPct = rawHeld > 0
+                ? ((rawHeld - sumCompressed) / rawHeld) * 100
+                : 0;
+
+            /* // 4) Debug log
+            console.log(
+                `Day ${today}: rawHeld=${rawHeld.toFixed(2)}TiB, ` +
+                `sumUncomp=${sumUncompress.toFixed(2)}TiB, ` +
+                `sumComp=${sumCompressed.toFixed(2)}TiB, ` +
+                `preEff=${prePct.toFixed(2)}%, postEff=${postPct.toFixed(2)}%`
+            ); */
+
+
+            dedupePreCompressionOverTime.push(Math.max(0, prePct));
+            dedupeEfficiencyOverTime.push(Math.max(0, postPct));
 
             // block-map size = rawHeldTiB × 3 GiB per TiB (as before)
             blockMapOverTime.push((sourceSizeTiB * keptCount) * 3);
@@ -587,6 +617,7 @@
         const simMonths = parseInt(document.getElementById('simulationMonths').value, 10);
         const compressionPct = parseFloat(document.getElementById('compression').value) / 100;
         const cloudDelay = parseInt(document.getElementById('cloudDelay').value, 10);
+        const initialCompression = parseFloat(document.getElementById('initialCompression').value) / 100;
 
         const days = simMonths * 30;
         const daysLabels = Array.from({ length: days }, (_, i) => `Day ${i + 1}`);
@@ -602,7 +633,7 @@
         } = simulateRetention(
             days, sourceSizeTiB, changeRate, compressionPct,
             dailyRetention, weeklyRetention, monthlyRetention,
-            yearlyRetention, cloudDelay
+            yearlyRetention, cloudDelay, initialCompression
         );
         //End of Simulation call.
 
@@ -662,7 +693,7 @@
             return tierMetaOverTime[idx] || {};
         });
 
-        // Logging to check values - comment out if not required
+        /* // Logging to check values - comment out if not required
         console.log({
             daysCount,
             lastIdx,
@@ -670,14 +701,11 @@
             monthlyKeys,
             lastRequiredKey: requiredKeysSeries[lastIdx],
             lastMonthlyKey: monthlyKeys[monthlyKeys.length - 1]
-        });
+        }); */
 
         //calculate total stored data
         const finalLocalTiB = storedLocallyOverTime.at(-1);
         const finalCloudTiB = storedInCloudOverTime.at(-1);
-        //stats.totalLocalStoredTiB = finalLocalTiB;
-        //stats.totalCloudStoredTiB = finalCloudTiB;
-        //stats.totalStoredTiB = finalLocalTiB + finalCloudTiB;
 
         // ─── Update Stats Panel ──────────────
         const totLogical = stats.totalLogicalTiB;
@@ -701,6 +729,11 @@
             maximumFractionDigits: 2
         });
         document.getElementById('totalCloud').textContent = totCloud.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+        // Update “Total Local Stored”:
+        document.getElementById('totalLocal').textContent = finalLocalTiB.toLocaleString(undefined, {
             minimumFractionDigits: 2,
             maximumFractionDigits: 2
         });
@@ -972,10 +1005,11 @@
             }
         };
 
-        // …right before window.chart5 = new Chart(…)
+        /* // debug chart 5 right before window.chart5 = new Chart(…)
         console.log('Day labels:', daysLabels);
         console.log('Local series:', storedLocallyOverTime);
         console.log('Cloud series:', storedInCloudOverTime);
+        */
 
 
         // Chart 5: Local vs Cloud
@@ -1066,9 +1100,12 @@
             }
         );
     }
-    //When button is pushed..
+    //When Generate Charts button is pushed..
     document.getElementById('generateBtn')
-        .addEventListener('click', generateCharts);
+        .addEventListener('click', () => {
+            //return instantly...
+            setTimeout(generateCharts,0);
+        });
 
     // When reset button is pushed…
     // Reset all inputs back to their original defaults, then redraw
@@ -1100,7 +1137,7 @@
             });
         });
     })();
-    // 1️⃣ Hook up the Export button
+    // 1️⃣ Hook up the Export CSV button
     document.getElementById('exportCsvBtn')
         .addEventListener('click', exportCsv);
 
@@ -1121,6 +1158,7 @@
         const yearlyRetention = parseInt(document.getElementById('yearlyRetention').value, 10);
         const compressionPct = parseFloat(document.getElementById('compression').value) / 100;
         const cloudDelay = parseInt(document.getElementById('cloudDelay').value, 10);
+        const initialCompression = parseFloat(document.getElementById('initialCompression').value) / 100;
 
         const simMonths = parseInt(document.getElementById('simulationMonths').value, 10);
         const days = simMonths * 30;    // exactly as in generateCharts()
@@ -1140,7 +1178,7 @@
             stats } = simulateRetention(
                 days, sourceSizeTiB, changeRate, compressionPct,
                 dailyRetention, weeklyRetention, monthlyRetention,
-                yearlyRetention, cloudDelay
+                yearlyRetention, cloudDelay, initialCompression
             );
 
         // 3️⃣ Build the CSV rows
@@ -1148,6 +1186,20 @@
         // 1) Report title row
         rows.push([reportName]);
         rows.push([]);  // blank line
+
+        // - Input Variables section -
+
+        rows.push(['Input Parameter', 'Value']);
+        rows.push(['Source Data Size (TiB)', sourceSizeTiB]);
+        rows.push(['Change Rate (%)', (changeRate * 100).toFixed(2)]);
+        rows.push(['Daily Retention (days)', dailyRetention]);
+        rows.push(['Weekly Retention (count)', weeklyRetention]);
+        rows.push(['Monthly Retention (count)', monthlyRetention]);
+        rows.push(['Yearly Retention (count)', yearlyRetention]);
+        rows.push(['Simulation Time (months)', simMonths]);
+        rows.push(['Compression Savings (%)', (compressionPct * 100).toFixed(2)]);
+        rows.push(['Days Before Data Moves to Cloud', cloudDelay]);
+        rows.push(['Initial Backup Compression (%)', (initialCompression * 100).toFixed(2)]);
 
         //add Recommendations to CSV
         const currentTier = stats.dictionary.tier;
@@ -1164,10 +1216,12 @@
         }
 
         // — Summary section —
-        rows.push(['Metric', 'Value']);
+        rows.push([]);
+        rows.push(['Results', 'Value']);
         rows.push(['Total Logical (TiB)', stats.totalLogicalTiB.toFixed(2)]);
         rows.push(['Total Stored (TiB)', stats.totalStoredTiB.toFixed(2)]);
-        rows.push(['Total Cloud (TiB)', stats.totalCloudTiB.toFixed(2)]);
+        rows.push(['Total Cloud (TiB)', stats.totalCloudStoredTiB.toFixed(2)]);
+
         // prefer stats.heldRawDataTiB, but fallback to the last day from the series
         let heldRawTiB = stats.heldRawDataTiB;
         if (heldRawTiB === undefined || isNaN(heldRawTiB)) {
@@ -1190,7 +1244,9 @@
 
         rows.push(['Required Keys', stats.dictionary.requiredKeys]);
         rows.push(['Used Keys (%)', stats.dictionary.usedPct.toFixed(2)]);
-        rows.push(['Block Map Size (GiB)', stats.blockMapSizeGiB.toFixed(2)]);
+
+        const lastBm = blockMapOverTime.at(-1) || 0;
+        rows.push(['Block Map Size (GiB)', lastBm.toFixed(2)]);
 
         rows.push([]); // blank line
 
