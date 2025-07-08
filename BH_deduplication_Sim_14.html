@@ -693,6 +693,20 @@
             return tierMetaOverTime[idx] || {};
         });
 
+        // ▶  New step: compute the next‐up tier whenever usage ≥ 90%
+        const monthlyRecMeta = monthlyMeta.map((meta, i) => {
+            if (!meta.max) return meta;
+            const usedPct = (monthlyKeys[i] / meta.max) * 100;
+            const idx = keyLookupTable.findIndex(
+                k => k.Size === meta.Size && k.Base_RAM === meta.Base_RAM
+            );
+            if (usedPct >= 90 && idx >= 0 && idx < keyLookupTable.length - 1) {
+                return keyLookupTable[idx + 1];
+            }
+            return meta;
+        });
+        const monthlyRecSizes = monthlyRecMeta.map(m => m.Size || "N/A");
+
         /* // Logging to check values - comment out if not required
         console.log({
             daysCount,
@@ -924,8 +938,12 @@
                 tooltip: {
                     callbacks: {
                         label: ctx => {
-                            // `tierMetaOverTime` must be the array you returned from simulateRetention
-                            const meta = monthlyMeta[ctx.dataIndex] || {};
+                            const idx = ctx.dataIndex
+                            const isRec = ctx.dataset.label === "Recommended Tier"
+                            // `tierMetaOverTime` must be the array eturned from simulateRetention
+                            const meta = isRec
+                                ? monthlyRecMeta[idx]
+                                : monthlyMeta[idx];
                             return [
                                 `Size: ${meta.Size || "N/A"}`,
                                 `Base RAM: ${meta.Base_RAM || "N/A"}`,
@@ -975,7 +993,18 @@
                     backgroundColor: "rgba(245, 158, 11, 0.2)",
                     fill: true,
                     stepped: true
-                }]
+                },
+                {
+                    label: "Recommended Tier",
+                    data: monthlyRecSizes.map((size, i) => ({
+                        x: monthLabels[i],
+                        y: size
+                    })),
+                    borderColor: "#10b981",
+                    fill: false,
+                    stepped: true
+                }
+            ]
             },
             options: baseOpts4
         });
@@ -1104,7 +1133,7 @@
     document.getElementById('generateBtn')
         .addEventListener('click', () => {
             //return instantly...
-            setTimeout(generateCharts,0);
+            setTimeout(generateCharts, 0);
         });
 
     // When reset button is pushed…
