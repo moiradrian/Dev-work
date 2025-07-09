@@ -223,6 +223,7 @@
             <p><strong>Bit Shift Setting:</strong> <span id="keyTierShift">-</span></p>
             <p><strong>Page Shift Setting:</strong> <span id="keyTierPage">-</span></p>
             <p><strong>Meta Data Size:</strong> <span id="blockMapSize">-</span>GiB</p>
+            <p><strong>Reference Count Size:</strong> <span id="refCountFinal">-</span>GiB</p>
             <div id="recommendedConfig">
                 <h2>Recommended Configuration</h2>
                 <p><strong>Base RAM:</strong> <span id="recKeyTierBase">–</span></p>
@@ -241,10 +242,17 @@
             <h3>Stored Data Over Time</h3>
             <canvas id="storageChart"></canvas>
         </div>
+
+        <div class="chart-box">
+            <h3>Local vs Cloud Storage Over Time</h3>
+            <canvas id="cloudChart"></canvas>
+        </div>
+
         <div class="chart-box">
             <h3>Deduplication Efficiency Over Time</h3>
             <canvas id="dedupeChart"></canvas>
         </div>
+
         <div class="chart-box">
             <h3>Required Keys Over Time</h3>
             <canvas id="keysChart"></canvas>
@@ -257,13 +265,14 @@
             <h3>Dictionary Tier Over Time</h3>
             <canvas id="DictChart"></canvas>
         </div>
-        <div class="chart-box">
-            <h3>Local vs Cloud Storage Over Time</h3>
-            <canvas id="cloudChart"></canvas>
-        </div>
+
         <div class="chart-box">
             <h3>Meta-Data Size Over Time</h3>
             <canvas id="blockMapChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <h3>reference Count Size Over Time</h3>
+            <canvas id="refChart"></canvas>
         </div>
         <div class="chart-box">
             <h3>Daily New Data: Uncompressed vs Compressed</h3>
@@ -321,6 +330,7 @@
         const dictionarySizesOverTime = [];
         const tierMetaOverTime = [];
         const newTotalUncompressedOverTime = [];
+        const dailyRefCounts = [];
 
         // for delta-charts
         const dailyUncompressedDelta = [];
@@ -489,6 +499,13 @@
             ) || {};
             dictionarySizesOverTime.push(match.Size || 'N/A');
             tierMetaOverTime.push(match);
+
+            // sum of uncompressed unique (sumUncompress) is rawHeldPost
+            const bytesUncompressed = sumUncompress * (2 ** 40);           // TiB → bytes
+            const entries = bytesUncompressed / (32 * 2 ** 20);            // ÷32 MiB
+            const refBytes = entries * 4096;                              // ×4 KiB per entry
+            const refGiB = refBytes / (2 ** 30);                          // bytes → GiB
+            dailyRefCounts.push(refGiB);
         }
         // ── 3️⃣ after the retention build your total-uncompressed series ─────────
         // combine local+cloud raw deltas into one series:
@@ -526,6 +543,7 @@
             usedPct
         };
 
+
         return {
             // time-series
             storedLocallyOverTime,
@@ -543,7 +561,7 @@
             dictionarySizesOverTime,
             tierMetaOverTime,
             newTotalUncompressedOverTime,
-
+            dailyRefCounts,
             // final stats object
             stats
         };
@@ -629,7 +647,7 @@
             retainedLogicalOverTime, requiredKeysSeries,
             dictionarySizesOverTime, tierMetaOverTime, heldRawDataOverTime, blockMapOverTime, stats, storedTiB,
             uncompressedDataOverTime, compressedDataOverTime, uncompressedLocalOverTime, uncompressedCloudOverTime,
-            newTotalUncompressedOverTime, dailyUncompressedDelta, dailyCompressedDelta
+            newTotalUncompressedOverTime, dailyUncompressedDelta, dailyCompressedDelta, dailyRefCounts
         } = simulateRetention(
             days, sourceSizeTiB, changeRate, compressionPct,
             dailyRetention, weeklyRetention, monthlyRetention,
@@ -669,7 +687,7 @@
         // monthly down-sampling
         const monthLabels = Array.from({ length: simMonths }, (_, i) => `Month ${i + 1}`);
 
-        // End of month alighnment for required keys and required dict sizing
+        // End of month alignment for required keys and required dict sizing
         const daysCount = requiredKeysSeries.length;
         const lastIdx = daysCount - 1;
 
@@ -707,6 +725,13 @@
         });
         const monthlyRecSizes = monthlyRecMeta.map(m => m.Size || "N/A");
 
+        // ─── build monthly down-sampled refCounts ────────────────────────────────
+        //const monthLabels = Array.from({ length: simMonths }, (_, i) => `Month ${i + 1}`);
+        const monthlyRefCounts = monthLabels.map((_, m) => {
+            const idx = Math.min((m + 1) * 30 - 1, days - 1);
+            return dailyRefCounts[idx] || 0;
+        });
+
         /* // Logging to check values - comment out if not required
         console.log({
             daysCount,
@@ -727,6 +752,8 @@
         const totStored = stats.totalStoredTiB;
         const totCloud = stats.totalCloudStoredTiB;
         const heldRawDataTiB = stats.heldRawDataTiB;
+        document.getElementById('refCountFinal').textContent =
+            monthlyRefCounts.at(-1).toFixed(2);
 
         //document.getElementById('totalRawDataTiB').textContent = totLogical.toFixed(2);
         document.getElementById('totalRawDataTiB').textContent = totLogical.toLocaleString(2);
@@ -826,7 +853,7 @@
 
         // ─── Render Charts ────────────────────────────
         // destroy old charts - clean for new charts
-        ['chart1', 'chart2', 'chart3', 'chart4', 'chart5', 'chart6', 'chart7'].forEach(id => {
+        ['chart1', 'chart2', 'chart3', 'chart4', 'chart5', 'chart6', 'chart7', 'chart8'].forEach(id => {
             if (window[id] instanceof Chart) window[id].destroy();
         });
 
@@ -1136,7 +1163,30 @@
                 options: deltaOpts
             }
         );
-    }
+        window.chart8 = new Chart(
+            document.getElementById('refChart').getContext('2d'),
+            {
+                type: 'line',
+                data: {
+                    labels: monthLabels,
+                    datasets: [{
+                        label: 'Reference Counts Footprint (GiB)',
+                        data: monthlyRefCounts,
+                        borderColor: '#ef4444',
+                        fill: false,
+                        tension: 0.5,
+                        pointRadius: 0
+                    }]
+                },
+                options: getChartOptions(
+                    'RefCounts Footprint Over Time',
+                    'Month',
+                    'GiB'
+                )
+            }
+        );
+    } // End of generateChart() function
+
     //When Generate Charts button is pushed..
     document.getElementById('generateBtn')
         .addEventListener('click', () => {
@@ -1199,8 +1249,10 @@
 
         const simMonths = parseInt(document.getElementById('simulationMonths').value, 10);
         const days = simMonths * 30;    // exactly as in generateCharts()
-        // Rebuild the same daysLabels you use in generateCharts:
+        // Rebuild the same daysLabels used in generateCharts:
         const daysLabels = Array.from({ length: days }, (_, i) => `Day ${i + 1}`);
+        // Rebuild the same MonthLabels used in generateCharts:
+        const monthLabels = Array.from({ length: simMonths }, (_, i) => `Month ${i + 1}`);
 
 
         const {
@@ -1212,11 +1264,23 @@
             requiredKeysSeries,
             blockMapOverTime,
             heldRawDataOverTime,
-            stats } = simulateRetention(
-                days, sourceSizeTiB, changeRate, compressionPct,
-                dailyRetention, weeklyRetention, monthlyRetention,
-                yearlyRetention, cloudDelay, initialCompression
-            );
+            uncompressedLocalOverTime,
+            uncompressedCloudOverTime,
+            dailyRefCounts,
+            stats
+        } = simulateRetention(
+            days, sourceSizeTiB, changeRate, compressionPct,
+            dailyRetention, weeklyRetention, monthlyRetention,
+            yearlyRetention, cloudDelay, initialCompression
+        );
+
+        const monthlyRefCounts = monthLabels.map((_, m) => {
+            // day index at month end (clamped)
+            const idx = Math.min((m + 1) * 30 - 1, dailyRefCounts.length - 1);
+            return dailyRefCounts[idx];
+        });
+        // Final value at the end of the simulation:
+        const refCountFinal = dailyRefCounts[dailyRefCounts.length - 1];
 
         // 3️⃣ Build the CSV rows
         const rows = [];
@@ -1284,6 +1348,7 @@
 
         const lastBm = blockMapOverTime.at(-1) || 0;
         rows.push(['Block Map Size (GiB)', lastBm.toFixed(2)]);
+        rows.push(['Final RefCount (GiB)', refCountFinal.toFixed(2)]);
 
         rows.push([]); // blank line
 
@@ -1295,6 +1360,13 @@
         rows.push(['Additional RAM', recTier.Additional_RAM || 'N/A']);
         rows.push(['Shift', recTier.Shift || 'N/A']);
         rows.push(['Page Shift', recTier.Page_Shift || 'N/A']);
+
+        // then dump the monthly refCounts:
+        rows.push([]);  // blank line
+        rows.push(['Month', 'RefCount (GiB)']);
+        monthLabels.forEach((label, i) => {
+            rows.push([label, monthlyRefCounts[i].toFixed(2)]);
+        });
 
         rows.push([]); // another blank line
 
@@ -1334,7 +1406,11 @@
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'dedupe_simulation.csv';
+        const safeName = reportName
+            .trim()
+            .replace(/[^a-zA-Z0-9_-]/g, '_')
+            .substring(0, 50) || 'Report';
+        a.download = `${safeName}_dedupe_simulation.csv`;
         a.click();
         URL.revokeObjectURL(url);
     }
