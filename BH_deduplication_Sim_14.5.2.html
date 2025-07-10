@@ -502,16 +502,6 @@
             const postPct = rawHeld > 0
                 ? ((rawHeld - sumCompressed) / rawHeld) * 100
                 : 0;
-
-            /* // 4) Debug log
-            console.log(
-                `Day ${today}: rawHeld=${rawHeld.toFixed(2)}TiB, ` +
-                `sumUncomp=${sumUncompress.toFixed(2)}TiB, ` +
-                `sumComp=${sumCompressed.toFixed(2)}TiB, ` +
-                `preEff=${prePct.toFixed(2)}%, postEff=${postPct.toFixed(2)}%`
-            ); */
-
-
             dedupePreCompressionOverTime.push(Math.max(0, prePct));
             dedupeEfficiencyOverTime.push(Math.max(0, postPct));
 
@@ -730,7 +720,7 @@
             : 0;
 
 
-        // monthly down-sampling
+        // monthly down-sampling for charting
         const monthLabels = Array.from({ length: simMonths }, (_, i) => `Month ${i + 1}`);
 
         // daily refcounts downsampled to monthly.
@@ -775,7 +765,7 @@
             return tierMetaOverTime[idx] || {};
         });
 
-        // ▶  New step: compute the next‐up tier whenever usage ≥ 90%
+        // compute the next‐up tier whenever usage ≥ 90%
         const monthlyRecMeta = monthlyMeta.map((meta, i) => {
             if (!meta.max) return meta;
             const usedPct = (monthlyKeys[i] / meta.max) * 100;
@@ -789,22 +779,11 @@
         });
         const monthlyRecSizes = monthlyRecMeta.map(m => m.Size || "N/A");
 
-        // ─── build monthly down-sampled refCounts ────────────────────────────────
-        //const monthLabels = Array.from({ length: simMonths }, (_, i) => `Month ${i + 1}`);
+        //build monthly down-sampled refCounts
         const monthlyRefCounts = monthLabels.map((_, m) => {
             const idx = Math.min((m + 1) * 30 - 1, days - 1);
             return dailyRefCounts[idx] || 0;
         });
-
-        /* // Logging to check values - comment out if not required
-        console.log({
-            daysCount,
-            lastIdx,
-            monthLabels,
-            monthlyKeys,
-            lastRequiredKey: requiredKeysSeries[lastIdx],
-            lastMonthlyKey: monthlyKeys[monthlyKeys.length - 1]
-        }); */
 
         //calculate total stored data
         const finalLocalTiB = storedLocallyOverTime.at(-1);
@@ -820,8 +799,6 @@
         document.getElementById('finalRefCountLocal').textContent = finalRefCountLocal.toFixed(2);
         document.getElementById('finalRefCountCloud').textContent = finalRefCountCloud.toFixed(2);
         document.getElementById('refCountFinal').textContent = refCountFinal.toFixed(2);
-
-        //document.getElementById('totalRawDataTiB').textContent = totLogical.toFixed(2);
         document.getElementById('totalRawDataTiB').textContent = totLogical.toLocaleString(2);
         document.getElementById('storedDataOverTime').textContent = stats.totalStoredTiB.toLocaleString(undefined, {
             minimumFractionDigits: 2,
@@ -861,8 +838,8 @@
         document.getElementById('requiredKeys').textContent = stats.dictionary.requiredKeys.toLocaleString();
         document.getElementById('totalMaxKeys').textContent = (tier.max || 0).toLocaleString();
         document.getElementById('usedKeysPercent').textContent = usedPct.toFixed(2);
-        // ─── Update Used Keys Percent ───────────────────────
-        //const usedPct = stats.dictionary.usedPct;
+
+        // update Used Keys Percent
         const usedEl = document.getElementById('usedKeysPercent');
         usedEl.textContent = usedPct.toFixed(2) + '%';
 
@@ -872,7 +849,7 @@
         } else if (usedPct >= 80) {
             usedEl.style.color = 'yellow';
         } else {
-            usedEl.style.color = 'green';  // fall back to whatever your CSS says
+            usedEl.style.color = 'green';  // fall back to whatever CSS says
         }
         document.getElementById('keyTierBase').textContent = tier.Base_RAM || 'N/A';
         document.getElementById('keyTierSize').textContent = tier.Size || 'N/A';
@@ -896,7 +873,7 @@
         // determine if we actually recommended the *next* tier
         const recommendedUp = pctUsed >= 90 && idx >= 0 && idx < keyLookupTable.length - 1;
 
-        // pick your highlight color (or use any valid CSS color)
+        // pick highlight colour (or use any valid CSS color)
         const recColor = recommendedUp ? 'green' : 'inherit';
         const recEls = {
             Base: document.getElementById('recKeyTierBase'),
@@ -912,7 +889,7 @@
         recEls.Shift.textContent = recTier.Shift || 'N/A';
         recEls.Page.textContent = recTier.Page_Shift || 'N/A';
 
-        // apply your color to each
+        // apply colour to each
         Object.values(recEls).forEach(el => {
             el.style.color = recColor;
         });
@@ -921,8 +898,6 @@
         const dictSizeGiB = sizeStrToGiB(recTier.Size);
 
         // 2) Grab the very last block-map size
-        //const lastBlockMapGiB = blockMapOverTime.at(-1) || 0;
-
         // 3) Grab your ref-counts you already computed:
         const finalRefLocal = dailyRefCountsLocal.at(-1) || 0;
         const finalRefCloud = dailyRefCountsCloud.at(-1) || 0;
@@ -930,17 +905,20 @@
 
         // 4) Sum up
         const totalAllMetaData = lastBlockMapGiB + finalRefTotal + dictSizeGiB;
+
         //write it to the UI
         document.getElementById('totalAllMetaData').textContent = totalAllMetaData.toFixed(2);
+
         //recommended meta-data disk size is 10% extra on top of totalAllMetaData
         const totalAllMetaPlus = totalAllMetaData * 1.1;
+
         // write it to the UI
         const metaEl = document.getElementById('totalAllMetaPlus');
         metaEl.textContent = totalAllMetaPlus.toFixed(2) + 'GiB';
         metaEl.style.color = 'green';
 
 
-        // ─── Render Charts ────────────────────────────
+        // Render Charts
         // destroy old charts - clean for new charts
         ['chart1', 'chart2', 'chart3', 'chart4', 'chart5', 'chart6', 'chart7', 'chart8'].forEach(id => {
             if (window[id] instanceof Chart) window[id].destroy();
@@ -1158,13 +1136,6 @@
             }
         };
 
-        /* // debug chart 5 right before window.chart5 = new Chart(…)
-        console.log('Day labels:', daysLabels);
-        console.log('Local series:', storedLocallyOverTime);
-        console.log('Cloud series:', storedInCloudOverTime);
-        */
-
-
         // Chart 5: Local vs Cloud
         window.chart5 = new Chart(
             document.getElementById('cloudChart').getContext('2d'),
@@ -1185,8 +1156,6 @@
                         }
                     ]
                 }
-
-                //options: getChartOptions('Local vs Cloud Storage', 'Day', 'TiB')
                 , options: cloudOpts
             }
         );
@@ -1313,7 +1282,7 @@
             generateCharts();
         });
 
-    // ─── Auto–refresh on input change (2 s debounce) ───
+    // Auto–refresh on input change (2 s debounce)
     ; (function () {
         let redrawTimer;
         // Listen on every input or select in your parameters panel
@@ -1328,9 +1297,6 @@
             });
         });
     })();
-    // 1️⃣ Hook up the Export CSV button
-    document.getElementById('exportCsvBtn')
-        .addEventListener('click', exportCsv);
 
     // 1️⃣ Hook up the Export CSV button  
     document.getElementById('exportCsvBtn')
@@ -1350,10 +1316,7 @@
     reportInput.addEventListener('input', toggleExportBtn);
 
     function exportCsv() {
-
-
-
-        // 2️⃣ Grab your data from the last simulation run
+        // Grabdata from the last simulation run
         // assume these arrays & stats are in scope or you re–call simulateRetention here
         // ── A) Grab the report name input ──
         const reportName = document.getElementById('reportName').value.trim() || 'Report';
@@ -1520,7 +1483,7 @@
 
         rows.push([]); // blank line
 
-        // ── Recommended Configuration ──
+        // Recommended Configuration
 
         rows.push(['Recommended Configuration', '']);
         rows.push(['Base RAM', recTier.Base_RAM || 'N/A']);
