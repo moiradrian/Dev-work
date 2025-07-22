@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>AI Helper with External Documents</title>
+  <style>
+    body {
+      font: 16px/1.4 system-ui;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    #log {
+      flex: 1;
+      overflow: auto;
+      padding: 1rem;
+    }
+
+    .msg {
+      max-width: 60ch;
+      margin: .5rem 0;
+      border-radius: 12px;
+      padding: .6rem .9rem;
+    }
+
+    .user {
+      background: #cbe7ff;
+      align-self: flex-end;
+    }
+
+    .ai {
+      background: #f1f1f1;
+    }
+
+    form {
+      display: flex;
+      gap: .5rem;
+      padding: .5rem;
+      background: #fafafa;
+    }
+
+    input[type="text"] {
+      flex: 1;
+      padding: .6rem;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+    }
+
+    /* file input styling */
+    label.file-input {
+      padding: .5rem;
+      background: #eef;
+      display: block;
+      margin: .5rem;
+      text-align: center;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="log"></div>
+  <form id="chat">
+    <input id="q" type="text" autocomplete="off" placeholder="Ask a question...">
+    <button type="submit">Send</button>
+  </form>
+
+  <!-- File picker for external docs -->
+  <label class="file-input">
+    📂 Load documents: <input id="file-input" type="file" multiple accept=".txt,.pdf,.docx">
+  </label>
+
+  <!-- Hidden embedded KB (optional) -->
+  <script id="kb" type="text/plain">
+AcmeCorp Warranty FAQ  •  Last updated 2025-04-12
+1. Standard warranty: 24 months from invoice date.
+2. Batteries are covered for 12 months or 300 cycles, whichever comes first.
+3. RMA portal: https://acme.example.com/rma
+  </script>
+
+  <!-- Vendor scripts for PDF & Word parsing -->
+  <script src="./vendor/pdf.js"></script>
+  <script src="./vendor/mammoth.browser.min.js"></script>
+
+  <!-- WebLLM IIFE bundle -->
+  <script src="./web-llm.iife.js"></script>
+
+  <script type="module">
+    // Log available models
+    console.log(
+      'Available models:',
+      window.WebLLM.prebuiltAppConfig.model_list.map(m => m.model_id)
+    );
+
+    /* ---------- 1. Embedded KB ---------- */
+    const KB = document.getElementById('kb').textContent.trim();
+
+    /* ---------- 2. Config ---------- */
+    const USE_LOCAL = true;               // toggle cloud vs local
+    const MODEL    = 'gpt-4o-mini';      // if using cloud path
+    const API_KEY  = 'YOUR_OPENAI_KEY';  // replace with your key
+
+    /* ---------- 3. UI helpers ---------- */
+    const log = document.getElementById('log');
+    const add = (cls, text) => {
+      const div = Object.assign(
+        document.createElement('div'),
+        { className: 'msg ' + cls, textContent: text }
+      );
+      log.append(div);
+      log.scrollTop = log.scrollHeight;
+    };
+
+    /* store external docs as {name, text}[] */
+    let externalDocs = [];
+
+    /* ---------- 4. File‐input handler ---------- */
+    document.getElementById('file-input').addEventListener('change', async e => {
+      externalDocs = [];
+      for (const file of e.target.files) {
+        try {
+          if (file.name.endsWith('.txt')) {
+            const txt = await file.text();
+            externalDocs.push({ name: file.name, text: txt });
+          } else if (file.name.endsWith('.pdf')) {
+            const buf = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+            let full = '';
+            for (let i = 1; i <= pdf.numPages; i++) {
+              const page = await pdf.getPage(i);
+              const cont = await page.getTextContent();
+              full += cont.items.map(it => it.str).join(' ') + '\n';
+            }
+            externalDocs.push({ name: file.name, text: full });
+          } else if (file.name.endsWith('.docx')) {
+            const buf = await file.arrayBuffer();
+            const { value: docText } = await mammoth.extractRawText({ arrayBuffer: buf });
+            externalDocs.push({ name: file.name, text: docText });
+          }
+        } catch (err) {
+          console.error(`Failed to load ${file.name}:`, err);
+        }
+      }
+      add('ai', `Loaded ${externalDocs.length} document(s): ` +
+        externalDocs.map(d => d.name).join(', '));
+    });
+
+    /* ---------- 5A. Cloud call ---------- */
+    async function askCloud(question) {
+      const body = {
+        model: MODEL,
+        messages: [
+          { role: 'system', content: `You are an accurate assistant. Base answers ONLY on this resource:\n"""${KB}"""` },
+          { role: 'user', content: question }
+        ],
+        stream: false
+      };
+      const res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + API_KEY
+        },
+        body: JSON.stringify(body)
+      });
+      const js = await res.json();
+      return js.choices?.[0]?.message?.content?.trim() ?? 'No answer';
+    }
+
+    /* ---------- 5B. Local WebLLM path ---------- */
+    let localEngine;
+    async function initLocal() {
+      localEngine = await WebLLM.CreateMLCEngine(
+        'TinyLlama-1.1B-Chat-v1.0-q4f16_1-MLC',
+        { initProgressCallback: p => console.log('load progress:', p) }
+      );
+    }
+
+    async function askLocal(question) {
+      if (!localEngine) await initLocal();
+      // combine embedded KB + external docs
+      const combined = [KB]
+        .concat(externalDocs.map(d => `=== ${d.name}\n${d.text}`))
+        .join('\n\n');
+      const response = await localEngine.chat.completions.create({
+        messages: [
+          { role: 'system', content: `You are an accurate assistant. Base answers ONLY on these resources:\n"""${combined}"""` },
+          { role: 'user', content: question }
+        ],
+        stream: false
+      });
+      return response.choices?.[0]?.message?.content?.trim() ?? 'No answer';
+    }
+
+    /* ---------- 6. Hook submit handler ---------- */
+    document.getElementById('chat').addEventListener('submit', async e => {
+      e.preventDefault();
+      const q = qInput.value.trim();
+      if (!q) return;
+      add('user', q);
+      qInput.value = '';
+      add('ai', '…');
+      const ans = USE_LOCAL ? await askLocal(q) : await askCloud(q);
+      log.lastChild.textContent = ans;
+    });
+    const qInput = document.getElementById('q');
+  </script>
+</body>
+
+</html>
