@@ -1,0 +1,26 @@
+{
+  "name": "dev-work",
+  "version": "1.0.0",
+  "main": "web-llm.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moiradrian/Dev-work.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/moiradrian/Dev-work/issues"
+  },
+  "homepage": "https://github.com/moiradrian/Dev-work#readme",
+  "description": "",
+  "devDependencies": {
+    "esbuild": "^0.25.8"
+  },
+  "dependencies": {
+    "@mlc-ai/web-llm": "^0.2.79"
+  }
+}

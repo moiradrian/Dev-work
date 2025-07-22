@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>Single‑file AI helper</title>
+  <style>
+    body {
+      font: 16px/1.4 system-ui;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    #log {
+      flex: 1;
+      overflow: auto;
+      padding: 1rem;
+    }
+
+    .msg {
+      max-width: 60ch;
+      margin: .5rem 0;
+      border-radius: 12px;
+      padding: .6rem .9rem;
+    }
+
+    .user {
+      background: #cbe7ff;
+      align-self: flex-end;
+    }
+
+    .ai {
+      background: #f1f1f1;
+    }
+
+    form {
+      display: flex;
+      gap: .5rem;
+      padding: .5rem;
+      background: #fafafa;
+    }
+
+    input {
+      flex: 1;
+      padding: .6rem;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="log"></div>
+  <form id="chat"><input id="q" autocomplete="off"><button>Send</button></form>
+
+  <!-- Hidden blob the agent should consult -->
+  <script id="kb" type="text/plain">
+AcmeCorp Warranty FAQ  •  Last updated 2025-04-12
+1. Standard warranty: 24 months from invoice date.
+2. Batteries are covered for 12 months or 300 cycles, whichever comes first.
+3. RMA portal: https://acme.example.com/rma
+</script>
+
+  <script src="./web-llm.iife.js"></script>
+
+  <script type="module">
+
+    console.log(
+      'Available models:',
+      window.WebLLM.prebuiltAppConfig.model_list.map(m => m.model_id)
+    );
+
+    /* ---------- 1. Grab embedded knowledge --------- */
+    const KB = document.getElementById('kb').textContent.trim();
+
+    /* ---------- 2. Decide which backend to use ------ */
+    const USE_LOCAL = true;          // set true for WebLLM
+    const MODEL = 'gpt-4o-mini';   // cloud model        (OpenAI path)
+    const API_KEY = 'YOUR_OPENAI_KEY'; // never commit real key
+
+    /* ---------- 3. Chat UI helpers ------------------ */
+    const log = document.getElementById('log');
+    const add = (cls, text) => {
+      const div = Object.assign(
+        document.createElement('div'),
+        { className: 'msg ' + cls, textContent: text }
+      );
+      log.append(div);
+      log.scrollTop = log.scrollHeight;
+    };
+
+    /* ---------- 4A. Cloud call ---------------------- */
+    async function askCloud(question) {
+      const body = {
+        model: MODEL,
+        messages: [
+          { role: 'system', content: `You are an accurate assistant. Base answers ONLY on this resource:\n"""${KB}"""` },
+          { role: 'user', content: question }
+        ],
+        stream: false
+      };
+      const r = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + API_KEY },
+        body: JSON.stringify(body)
+      });
+      const j = await r.json();
+      return j.choices?.[0]?.message?.content?.trim() ?? 'No answer';
+    }
+
+    /* ---------- 4B. Local WebLLM path --------------- */
+    let localEngine;
+
+    async function initLocal() {
+      // Load the quantized TinyLlama chat model
+      localEngine = await WebLLM.CreateMLCEngine(
+        'TinyLlama-1.1B-Chat-v1.0-q4f16_1-MLC',
+        {
+          initProgressCallback: p => console.log('load progress:', p)
+        }
+      );
+    }
+
+    async function askLocal(q) {
+      if (!localEngine) await initLocal();
+
+      const response = await localEngine.chat.completions.create({
+        messages: [
+          {
+            role: 'system',
+            content: `You are an accurate assistant. Base answers ONLY on this resource:\n"""${KB}"""`
+          },
+          { role: 'user', content: q }
+        ],
+        stream: false
+      });
+
+      return response.choices?.[0]?.message?.content?.trim() ?? 'No answer';
+    }
+
+
+    /* ---------- 5. Hook submit handler -------------- */
+
+    document.getElementById('chat').addEventListener('submit', async e => {
+      e.preventDefault();
+      const q = qInput.value.trim();
+      if (!q) return;
+      add('user', q); qInput.value = '';
+      add('ai', '…');
+      const ans = USE_LOCAL ? await askLocal(q) : await askCloud(q);
+      log.lastChild.textContent = ans;
+    });
+    const qInput = document.getElementById('q');
+  </script>
+</body>
+
+</html>
