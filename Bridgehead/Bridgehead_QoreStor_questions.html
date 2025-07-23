@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="utf-8">
-  <title>AI Helper with External Documents</title>
+  <title>AI Helper with Folder Documents</title>
   <style>
     body {
       font: 16px/1.4 system-ui;
@@ -48,15 +48,6 @@
       border: 1px solid #ccc;
       border-radius: 8px;
     }
-
-    /* file input styling */
-    label.file-input {
-      padding: .5rem;
-      background: #eef;
-      display: block;
-      margin: .5rem;
-      text-align: center;
-    }
   </style>
 </head>
 
@@ -67,12 +58,7 @@
     <button type="submit">Send</button>
   </form>
 
-  <!-- File picker for external docs -->
-  <label class="file-input">
-    📂 Load documents: <input id="file-input" type="file" multiple accept=".txt,.pdf,.docx">
-  </label>
-
-  <!-- Hidden embedded KB (optional) -->
+  <!-- Embedded KB (optional) -->
   <script id="kb" type="text/plain">
 AcmeCorp Warranty FAQ  •  Last updated 2025-04-12
 1. Standard warranty: 24 months from invoice date.
@@ -88,7 +74,7 @@ AcmeCorp Warranty FAQ  •  Last updated 2025-04-12
   <script src="./web-llm.iife.js"></script>
 
   <script type="module">
-    // Log available models
+    // Log available models (for debugging)
     console.log(
       'Available models:',
       window.WebLLM.prebuiltAppConfig.model_list.map(m => m.model_id)
@@ -113,47 +99,50 @@ AcmeCorp Warranty FAQ  •  Last updated 2025-04-12
       log.scrollTop = log.scrollHeight;
     };
 
-    /* store external docs as {name, text}[] */
+    /* ---------- 4. Load documents from folder ---------- */
+    // List your document filenames here (must match files in ./documents/)
+    const docsToLoad = [
+      'CloudWave QoreStor Report Final.docx',
+      'Role and trade-off of Shift settings.docx'
+    ];
     let externalDocs = [];
 
-    /* ---------- 4. File‐input handler ---------- */
-    document.getElementById('file-input').addEventListener('change', async e => {
-      externalDocs = [];
-      for (const file of e.target.files) {
+    (async () => {
+      for (const name of docsToLoad) {
+        const path = `documents/${name}`;
         try {
-          if (file.name.endsWith('.txt')) {
-            const txt = await file.text();
-            externalDocs.push({ name: file.name, text: txt });
-          } else if (file.name.endsWith('.pdf')) {
-            const buf = await file.arrayBuffer();
+          if (name.endsWith('.txt')) {
+            const txt = await fetch(path).then(r => r.text());
+            externalDocs.push({ name, text: txt });
+          } else if (name.endsWith('.pdf')) {
+            const buf = await fetch(path).then(r => r.arrayBuffer());
             const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
             let full = '';
             for (let i = 1; i <= pdf.numPages; i++) {
               const page = await pdf.getPage(i);
-              const cont = await page.getTextContent();
-              full += cont.items.map(it => it.str).join(' ') + '\n';
+              const content = await page.getTextContent();
+              full += content.items.map(it => it.str).join(' ') + '\n';
             }
-            externalDocs.push({ name: file.name, text: full });
-          } else if (file.name.endsWith('.docx')) {
-            const buf = await file.arrayBuffer();
+            externalDocs.push({ name, text: full });
+          } else if (name.endsWith('.docx')) {
+            const buf = await fetch(path).then(r => r.arrayBuffer());
             const { value: docText } = await mammoth.extractRawText({ arrayBuffer: buf });
-            externalDocs.push({ name: file.name, text: docText });
+            externalDocs.push({ name, text: docText });
           }
         } catch (err) {
-          console.error(`Failed to load ${file.name}:`, err);
+          console.error(`Failed to load ${name}:`, err);
         }
       }
-      add('ai', `Loaded ${externalDocs.length} document(s): ` +
-        externalDocs.map(d => d.name).join(', '));
-    });
+      add('ai', `Loaded ${externalDocs.length} document(s): ${docsToLoad.join(', ')}`);
+    })();
 
     /* ---------- 5A. Cloud call ---------- */
-    async function askCloud(question) {
+    async function askCloud(q) {
       const body = {
         model: MODEL,
         messages: [
           { role: 'system', content: `You are an accurate assistant. Base answers ONLY on this resource:\n"""${KB}"""` },
-          { role: 'user', content: question }
+          { role: 'user', content: q }
         ],
         stream: false
       };
@@ -177,17 +166,17 @@ AcmeCorp Warranty FAQ  •  Last updated 2025-04-12
         { initProgressCallback: p => console.log('load progress:', p) }
       );
     }
-
-    async function askLocal(question) {
+    async function askLocal(q) {
       if (!localEngine) await initLocal();
-      // combine embedded KB + external docs
+
       const combined = [KB]
         .concat(externalDocs.map(d => `=== ${d.name}\n${d.text}`))
         .join('\n\n');
+
       const response = await localEngine.chat.completions.create({
         messages: [
           { role: 'system', content: `You are an accurate assistant. Base answers ONLY on these resources:\n"""${combined}"""` },
-          { role: 'user', content: question }
+          { role: 'user', content: q }
         ],
         stream: false
       });
