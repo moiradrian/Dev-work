@@ -57,13 +57,335 @@
 
   <!-- Hidden blob the agent should consult -->
   <script id="kb" type="text/plain">
-AcmeCorp Warranty FAQ  •  Last updated 2025-04-12
-1. Standard warranty: 24 months from invoice date.
-2. Batteries are covered for 12 months or 300 cycles, whichever comes first.
-3. RMA portal: https://acme.example.com/rma
+ === QoreStor instances running out of storage space ===
+Symptom:
+QoreStor instance runs out of disk space locally and in the cloud but is still showing good data space reduction in local and cloud storage. Local storage is physically less than the applied licence, physical disk would fill before any license usage 
+This situation can occur when there is insufficient storage both locally and, in the cloud, to facilitate the amount of data and rate of ingestion. Data size and ingestion rates may have increased, the cloud tiering policies and local storage space have not been updated. QoreStor licences cloud tier storage at a rate of three time the local storage licence. For example, if the local storage licence is 60TiB, then the cloud storage limit will be 3 x 60TiB = 180TiB. QoreStor will stop functioning and become ‘read-only’ as it no longer has enough space to operate.
+
+Remediation:
+To resolve the full storage space issue, more local storage was added to the QoreStor instance and a temporary larger license added. This gave the QoreStor instance some space to work withing and increased the available space in the cloud storage. The cloud tier retention policy was also updated and temporarily set the retention to 1 hour.
+This immediately allowed QoreStor to ‘stub’ some local data and free up space.
+
+===	QoreStor instances slow cleaning of unwanted data ===
+Symptom:
+It was noted that the general storage usage was high as cleaning out unwanted backup data was taking a long time and sometimes not completing but running continuously. 
+Quest Engineering noted that the cleaner for both local storage and cloud storage were a serial set of processes. One waiting for the other to complete. This proved unworkable within the boundaries of data ingestion and the cloud tiering policy being utilised. Quest made a product change to allow the cleaning operations of local storage and cloud storage to work in parallel, thus removing the need for to complete before the other could begin. 
+Remediation.
+This was released in version 7.4.0 and requests were made to upgrade QoreStor instances to version 7.4.0. Certain QoreStor instances were running short on available cleaner threads, with the adoption of version 7.4.1, a ‘soft’ increase of CPU counts can be made to allow more threads to run. Normally this is one thread per CPU, however having more threads to address a backlog of cleaning enabled a faster resolution.
+
+=== QoreStor instances with excessive cloud tier storage ===
+Symptom:
+Data that had met the conditions as per the defined policy had been moved out to cloud storage (AWS). However, the amount of data was not reducing and cleaning did not appear to complete its ‘laundry phase’ where it would actively remove data.
+Engineering discovery:
+With Quest engineers reviewing diagnostic files and remotely viewing the system with assistance from Cloudwave personnel, it was found that the ‘dictionary’ on certain QoreStor instances had filled up and older entries were being dropped for newer ones. This leaves blocks of data in the cloud ‘orphaned’. The observation of cleaning not taking place in cloud storage is a result of the default setting of not enabling ‘Cloud Compaction’.
+
+Remediation:
+In QoreStor instances where dictionary issues were found, depending on the depth of the issue the ‘dictionary’ space was increased to account for the level of deduplication and data being held locally and in the cloud.
+After this, QoreStor versions now all have a larger ‘dictionary’ size as default. This was implemented in Version 7.4.0, however any systems from previous versions may need to have their dictionary increased manually.
+There were certain systems that were in a situation that required manual intervention by Quest engineering to resolve the issues and walk through a pre-defined set of steps to provide a good working solution. During this process the ‘refcount log files’ exceeded a file size that would normally be not seen during normal operations. An updated ‘ofsck’ binary was created to circumvent this manually generated issue. The updated binary will be included in the next release of QoreStor (7.5) to cater for this edge case. See Appendix A for the defined 10 steps.
+Once the above pre-checks and ten step repair plan was used, to clear unwanted data from cloud the ‘Cloud Compact’ options were turned on.
+This will actively remove any defunct unwanted data left orphaned after the ten-step plan. This does impact cloud costs as I/O activities will be increased to remove the now defunct unwanted data. 
+
+=== QoreStor Instances Stopping/Restarting ===
+Symptom:
+It was observed that certain QoreStor instances were restarting services on a regular basis. With no indication of the issue.
+Engineering discovery:
+On systems where the QoreStor watcher, restarted services it was found that the system had run out of memory, core dumped and autonomously restarted the services as designed. However, this process continued as after a period the system would run out of memory again and restart again. It was observed that 3 core dump files existed, indicating three restarts due to a memory usage issue. The memory increase requirement is due to the need to expand the dictionary. The dictionary was expanded to it filling up. The dictionary was filling up due to the amount of data being held within the instance at a high level of deduplication.
+
+=== QoreStor instances not sending data from local to cloud storage ===
+Symptom:
+Running out of local disk space, QoreStor UI showing that license consumption does not match the physical used disk space on the QoreStor instance.
+Engineering discovery:
+Upon receiving a diagnostic report, it was found that an error state had been triggered preventing the data to be moved to cloud. It appears that it manifests when a file has already been sent to cloud and has some form of renaming happening in the backup workflow. The Bridgehead product does overwrite its backup files based upon a generational retention plan. For example, with a retention plan ‘Five Generations’ the sixth backup would overwrite the first of the five. Thus, keeping the last five backups available to restore from. This operation is expected behaviour from the Bridgehead software.
+What we found was in certain instances, with a rename it was not being acted upon correctly by QoreStor if that file was in cloud. Therefore, QoreStor was generating an error and not moving or updating the file to the cloud tier.
+The following is the expected operational methodology in this occurrence.	
+When a file or directory is changed on the local QoreStor storage and that file also exists in cloud storage, QoreStor checks to see if the meta-data is local and if the meta-data is in the cloud storage as well. If the meta-data in the cloud storage doesn’t yet exist, then we copy it out to cloud storage along with the file data. If the meta-data for the local source file exists locally and, in the cloud, but they do not match QoreStor performs an update and relinks the new meta-data to the data due to be copied to cloud.
+However, we found a regression bug in the code of the QoreStor file systems daemon binary relating to the ‘do not match’ condition above. It causes the file cloud copy selection to bail out with an error instead of running the operation to refresh the cloud-meta data with the newer local meta-data and copy the data to cloud. As a result all files that are in this particular state that are due to be copied  to cloud, they  fail with the error right away. This data is not moved to cloud as it should be and stays local. Thus, filling the local storage. A new binary was created with the regression bug fixed and deployed on this machine, it is now working through the data that is local and updating its associated cloud content.
+A new binary has been added to a release of QoreStor (7.4.1.173) such that this condition, if met will not cause the error but will relink the meta-data and files in cloud correctly.
+
+=== Checking Dictionary size and Cloud Tier Consumption if an alert is raised ===
+
+To find the current consumption of the dictionary, the following command can be carried out:
+/opt/qorestor/bin/ctrlrpc -p 9911 show.dedupe_stats
+
+The variable we need to check is the number of keys used uhd_total_nrecs.
+This number indicates, the consumed number of keys in the dictionary.
+If the number of keys is near or has reached the maximum allowed in the current dictionary, this is when we start to see issues. This can also be seen if the there is a high number shown by uhd_pruned.
+For example, uhd_pruned : 7250
+Checking which dictionary size is running a simple list of the files in the meta-data dictionary location.
+
+To determine the current size of the dictionary a list of the directory location will reveal the file names in use, the last two numbers on the file name indicate the shift size..
+
+	#ls -al /QSmetadata/qs_metadata/dict2
+
+-rw-------. 1 root root  68723736576 Nov 18 11:47 dict19
+-rw-------. 1 root root 137447407616 Nov 18 11:47 dict20
+-rw-------. 1 root root 274894749696 Nov 18 11:48 dict21
+-rw-------. 1 root root 343631003648 Nov 18 11:49 dict22
+-rw-------. 1 root root 584182726656 Nov 18 11:49 dict23
+
+Each Shift size has a maximum number of keys that can be used to reference the stored data chunks. With a 2KiB page size and an average 32KiB chunk size the number of referenceable chunk entries are shown below. If a dictionary needs to be expanded, extra disk space and RAM may need to be added as shown in the table 1 below.
+
+=== Dictionary Sizing Requirements	===
+Dictionary Shift number	Number of keys (Billion)	Disk Size Space 
+GiB	Cache Memory Required for Dictionary
+MB	Additional Memory Required 
+MB	Total memory required
+MB	Memory uplift 
+MB	Disk space uplift required
+GiB
+Shift 19	3	64	2,048	128	2,176	-	-
+Shift 20	6	128	4,096	240	4,336	2,160	64
+Shift 21	11	256	8,192	512	8,704	4,368	128
+Shift 22	23	384	16,384	1,424	17,808	9,104	128
+Shift 23	48	650	32,768	2,576	35,344	17,536	266
+
+ === Checking cloud tier consumption and health ===
+
+stats --cloud_tier
+
+#stats --cloud_tier
+Total Inodes                    : 9321
+Read Throughput                 : 0.00 MiB/s
+Write Throughput                : 0.00 MiB/s
+Current Files                   : 9136
+Current Bytes                   : 19859598233824
+Post Dedupe Bytes               : 2789951204098
+Post Compression Bytes          : 1303787964127
+Post Encryption Bytes           : 1304559767680
+Post Encryption Bytes in GiB    : 1215.0 GiB
+Bytes decrypted                 : 165032460416
+Cleaner Status                  : Done
+Compression Status              : Done
+Encryption Status               : Done
+Dedupe Savings                  : 85.95 %
+Compression Savings             : 53.27 %
+Total Savings                   : 93.43 %
+Current Recycle Bin Files       : 0
+Current Recycle Bin Logical Bytes: 0
+Current Recycle Bin Physical Bytes (estimated): 0
+Cloud read Throughput           : 0.00 MiB/s
+Cloud write Throughput          : 0.00 MiB/s
+Files in progress to cloud      : 0
+Total cloud bytes uploaded      : 12045161385255
+Total cloud bytes downloaded    : 673258904582
+Total cloud cache bytes read    : 99680219555
+Total cloud read bytes optimized: 52487912326
+Total cloud files               : 585091
+Total cloud overwritten files   : 509
+Total cloud bytes               : 1356098871664
+Total cloud bytes processed     : 0
+Total cloud ds bytes reclaimed  : 0
+Total Fast Cache space used (physical): 0
+Total cloud metadata bytes      : 51539103984
+Total space (rehydrated)        : 19911137337808
+
+If the "Dedupe Savings" are 0 % or less.  (i.e "Current Bytes" are far greater than "Post Dedupe Bytes") and if the cloud cleaner status is done.  Then enable cloud compaction with 10 step process.
+
+Expanding dictionary if required  
+NOTE: This has a memory and disk space usage impacts.
+Refer to Table 1. For the minimum disk and memory uplifts required. 
+
+
+By default, all new QoreStor installations now have an initial dictionary size of 256GiB, this is an improvement up from the normal ‘Cloud’ optimised and ‘Standard’ of 64GiB and 128GiB respectively. This is a Shift 21 sized dictionary with an 11 billion Keys available.
+
+Check current version is installed and up to date
+
+Installation of version (minimum) 7.4.1.173 – this includes the binary fixes covered in this document.
+Version 7.5.x and above is preferred.
+A full list of Cloudwave QoreStor instances can be exported from QorePortal in the ‘Cloudwave Organisation’ directly to an Excel spreadsheet. This provides a simple way to check the version of QoreStor across all QoreStor instances. 
+
+=== How to Check if full 10 step remediation is required ===
+
+	1. Check dictionary usage
+     		 /opt/qorestor/bin/ctrlrpc -p 9911 show.dedupe_stats.  
+     	
+	Need to know uhd_total_nrecs number 
+
+	2. If an alert has been raised and an email has been received with the following warning(s)…
+
+•	2065:en:Cloud Tier Storage usage is approaching capacity. 
+%s cleaner will be enabled outside of scheduled setting and performance impact may be observed.
+•	2066:en:Cloud Tier Storage usage reached full capacity. 
+%s switching to read-only mode for Cloud Tier containers.
+
+Use the following command to see if the cloud tier storage deduplication has been impacted. 
+
+ 	stats --cloud_tier 
+
+from the output check the following.
+If the "Dedupe Savings" are 0 % or less.  (i.e "Current Bytes" are far greater than "Post Dedupe Bytes") 
+And if the cloud cleaner status is “Done”.  Then run through the ten step plan and enable cloud compaction.
+
+3.  If the output from the ‘stats’ command does not provide 0% or less then to assist in cleaning update memory setting  ENV, the cleaner will take more memory -  create a new diagnostic dump and send it to Quest support for verification of memory size change required.
+4. If all cleaning processes are completed and 0% or negative deduplication is showing then the 10 step procedure needs to be run.
+ 
+ === The ten Step Procedure ===
+1.	Run the following command to scan the cloud tier storage group.
+
+ maintenance --filesystem --start_scan --storage_group DefaultCloudTier
+
+2.	Once the scan finishes the cleaner and starts OFSCK, stop the scan.  
+(monitor scan_status).
+
+⚠The above two steps make sure cleaner is done and active datastores are flushed to disk, before we remove refcounts.
+
+
+3.	Create a directory backup the refcounts
+
+ 	mkdir /QSdata/refcnt_backup
+
+4.	Add the following environment varaibles to the /etc/oca/customer.env file.
+ 
+   		export PLATFORM_ENABLE_CLOUD_DS_COMPACT=1
+   		export PLATFORM_ENABLE_CLOUD_DS_COMPACT_RDWR=1
+
+5.	Move the current refcounts directory and it’s contents into the backup directory
+
+ 	mv /QSdata/ocaroot/3/.ocarina_hidden/refcnt/  /QSdata/refcnt_backup/
+
+6.	Create a new refcounts directory
+
+	mkdir /QSdata/ocaroot/3/.ocarina_hidden/refcnt/ 
+
+7.	 Create a flag file to skip logging for ofsck.
+
+	touch "/var/ocarina/skip_logging”
+     	
+		ℹ This avoids logging in ofsck.log for the next scan – this improves speed.
+
+8.	Find process id (pid) of ocafsd.
+
+ps -ef | grep ocafsd
+
+9.	Run this single line command that stops any running ocafsd processes and imeadiately executes a new ofsck scan.
+You will need the process id of ocafsd from the previous step.
+
+	kill -CONT $(pid of ocafsd);  maintenance --filesystem --start_scan --storage_group DefaultCloudTier      
+     	
+		ℹ️ Single command, as we need to start scan immediately after CONT
+
+9. 	Wait for ofsck to finish, it will ask for repair.
+
+10.	Run the repair command. 
+
+	 maintenance --filesystem --repair_now
+
+   Appendix A
+=== List of QoreStor alerts === 
+that can be generated and sent via email. Items highlighted would be pertinent to issues in QoreStor instances that have manifested in systems at Cloudwave. Using the email notification capability is highly recommended such that if any issues arise a notification is sent directly to an administrator.
+
+2008:en:Data volume not present. Check all drives are inserted and powered up. Contact Quest Support.
+2009:en:%s Service failed to start after multiple attempts. Contact Quest Support.
+2010:en:%s Service crashed multiple times. Entering Maintenance mode. Contact Quest Support.
+2011:en:Insufficient disk space. %s switched to read-only mode.
+2012:en:Unable to detect %s type on Data Volume. Contact Quest Support.
+2013:en:Unable to detect %s type on Namespace Volume. Contact Quest Support.
+2014:en:%s scan discovered inconsistencies. Please check report and take action.
+2059:en:Available space at %s scan report path reached threshold. Please cleanup old diagnostics to proceed the scan.
+2016:en:Storage usage approaching system capacity. %s cleaner will be enabled outside of scheduled setting and performance impact may be observed.
+2017:en:Replication re-sync cannot proceed as namespace depth reached maximum.
+2018:en:%s has reached the maximum allowable File(s) and Directories limit, new file and directory creation will be denied, please cleanup %s.
+2019:en:%s is reaching the maximum allowable File(s) and Directories limit, new file and directory creation will be denied after the limit is reached, please cleanup %s.
+2020:en:Replication encountered unexpected error. Contact Quest support 
+2021:en:Datacheck detected potential inconsistency. Run %s scan with data verification check as soon as possible. ("maintenance --filesystem --start_scan verify_data")
+2028:en:Datacheck detected potential namespace inconsistency. Run %s scan as soon as possible. ("maintenance --filesystem --start_scan")
+2036:en:Datacheck detected inconsistency in lsu image. Run %s scan as soon as possible. ("maintenance --filesystem --start_scan verify_rda_metadata")
+2037:en:Datacheck detected potential corrupt lsu info. Run %s scan as soon as possible. ("maintenance --filesystem --start_scan verify_rda_metadata")
+2023:en:%s name space partition has reached maximum allowable limits, please delete old unused file(s) or disable replication(s).
+2024:en:%s name space partition is reaching maximum allowable limits, new replication resynch(s) will be stopped.
+2025:en:One or more software package is incompatible, please upgrade the appliance to rectify the issue.
+2026:en:%s volume has become in-active. Please call Quest Support, to fix the issue.
+2027:en:%s Service response time exceeded max threshold.
+2030:en:An OST container quota is exceeded. Check the event for container details.
+2034:en:System has a huge backlog of book keeping work. %s cleaner will be enabled outside of schedule setting and performance impact will be observed.
+2035:en:System clock has drifted more than 24 hours, from the last %s start, please check your clock settings and reboot.
+2038:en:Replication is disconnected on one or more containers. Please check event log or replication stats for details.
+2039:en:One or more replication target systems are running low in space. Please check event log or replication stats for details.
+2040:en:%s scan completed with no inconsistencies. Switching back to operational mode.
+2041:en:Replication detected potential inconsistency. Run filesystem scan with data verification check as soon as possible. ("maintenance --filesystem --start_scan verify_data")
+2042:en:Seeding device became full, add new device to continue.
+2043:en:Seeding cannot contact the target device. Check to make sure that the target device is available and write-enabled. Then remove and re-add the target device.
+2044:en:Seeding process complete.
+2045:en:System has reached space full condition, seeding will be stopped.
+2046:en:Seeding failed to create Zero log entries, switch to maintenance mode to correct the issue.
+2047:en:Found corrupted stream on seeding device. This error will be rectified during replication resync done on this seed data.
+2048:en:Seeding device metadata info file missing, unable to import.
+2049:en:Seeding device mount not accessible.
+2050:en:Seeding export paused as the device contains data from another seeding job. Cleanup the device and re-add to continue seeding.
+2051:en:Seeding encountered error.
+2052:en:Unable to decrypt the Seeding data, please check that the "password" and "encryption type" matches the Seeding export job.
+2053:en:System diagnostics partition is running low on space. Please copy out the old diagnostics bundles and delete for future auto diagnostics collection.
+2054:en:Appliance available storage level is below the set threshold, please schedule %s cleaner or expire older backups.
+2056:en:Appliance available storage level reached VTL threshold, unload all drives, expire old backups and schedule %s cleaner. Run "vtl --set_rw ..." to set the containers IO mode back to Read-Write.
+2055:en:Primary Keystore corruption detected. Run %s scan with data verification check
+2057:en:%s cleaner took longer time in processing the phases.
+2058:en:%s cleaner was not run to complete all phases since long time. 
+2060:en:One of the Fiber Channel ports is not online. Please run "fc --show --target" to check the status of each FC port.
+2061:en:One or more storage groups are close to exhausting their storage quota limit. Please check the events for more details.
+2062:en:One or more storage groups have exceeded their storage quota limit. Please check the events for more details.
+2063:en:Insufficient disk space in Performance Tier. %s switched to read-only mode for Performance Tier containers.
+2064:en:Performance Tier Storage usage approaching system capacity. %s cleaner will be enabled outside of scheduled setting and performance impact may be observed.
+2065:en:Cloud Tier Storage usage is approaching capacity. %s cleaner will be enabled outside of scheduled setting and performance impact may be observed.
+2066:en:Cloud Tier Storage usage reached full capacity. %s switching to read-only mode for Cloud Tier containers.
+2067:en:Unable to Bind to standard NFS ports. Check and stop nfs server.
+2068:en:Unable to Bind to standard NFS ports. Check and stop nfs server.
+2069:en:One or more Cloud Tier(s) are marked offline as cloud is not reachable. Check details of each Cloud Tier. There might be failures in reading data in Cloud Tier.
+2070:en:%s Disaster recovery requested. Switching to Disaster recovery.
+2071:en:Object Direct Storage usage is approaching capacity. %s cleaner will be enabled outside of scheduled setting and performance impact may be observed.
+2072:en:Object Direct Storage usage reached full capacity. %s switching to read-only mode for Object Direct containers.
+2073:en:Object Direct marked offline as Cloud is not reachable. There might be failures in reading data in Object Direct.
+2170780:en:%s disaster recovery triggered.
+2074:en:Cloud Archive Tier marked offline as Cloud is not reachable. There might be failures in reading from Cloud Archive Tier.
+2075:en:Archive Tier Storage usage is approaching capacity. %s cleaner will be enabled outside of scheduled setting and performance impact may be observed.
+2076:en:Cloud Archive Tier Storage usage reached full capacity. %s switching to read-only mode for Cloud Archive Tier containers.
+2077:en:Writing data to object storage failed, because object storage space reached its full capacity.
+2078:en:Cloud Tier for %s is marked offline as Cloud Storage Service is not reachable. There might be failures in reading data from Cloud Tier.
+2079:en:Cloud Archive Tier for %s is marked offline as Cloud Storage Service is not reachable. There might be failures in reading data from Cloud Archive Tier.
+2080:en:Physical storage space reaching near full capacity.
+2081:en:One of the dictionaries is full, Please check events for more details.
+2082:en:Scan requested on a Storage group. Switching storage group to read-only access. See events for details.
+2083:en:Filesystem checker did not complete on a storage group. Please check events for details and contact Quest Support.
+2084:en:OS-audit is not running or stopped or not logging events
+2085:en:Filesystem checker did not start on a storage group. Storage group is in read only mode. Please check events for details and contact Quest Support.
+2086:en:Filesystem checker did not complete on a storage group. Please check events for details and contact Quest Support.
+2087:en:Anomaly Detection service stopped. Please check events for details and contact Quest Support.
+2088:en:OS Authentication stats collection is not working for Anomaly Detection. Please check events for details and contact Quest Support.
+2089:en:Stats collection is not working for Anomaly Detection. Please check events for details and contact Quest Support.
+2090:en:DB Authentication issue for stats collection. Please check events for details and contact Quest Support.
+2091:en:One or more metadata objects could not be locked, or the lock could not be extended. Please check the events for more details.
+
+=== Glossary ===
+•	OFSCK – Ocarina File System Check. This scans and checks the validity of the deduplication file system.
+•	Storage Group – logical space where target data containers are created to hold data.
+•	Refcounts – the number of references held against a chunk of data that is used across multiple deduplicated data sets.
+•	ocafsd – Ocarina file system daemon
+Shift [number] (19,20,21,22)
+•	To store 15 billion records using a 21-bit shift approach, you'll need to understand how data can be efficiently distributed and organized using bit-shifting for indexing. Here's how it could work:
+o	1. 21-bit Addressing Overview
+	A 21-bit index can uniquely address 221=2,097,152 different slots or buckets.
+	To handle 15 billion records, you need a strategy to distribute these records across multiple buckets, partitions, or slots.
+o	2. Approach to Storage using 21-bit Shifts
+	Partitioning the Data:
+	Divide your 15 billion records into multiple groups (or partitions), each of which can be addressed using the 21-bit index space.
+	For example, if you have 15 billion records and a 21-bit index can address around 2 million slots, you'll need approximately 7,200 partitions since 15,000,000,000/2,097,152≈7200
+	Indexing within Partitions:
+•	Use a 21-bit shift for indexing within each partition. This means each partition can have up to 221 records.
+•	A record is then uniquely addressed by its partition number and its index within that partition.
+o	3. Practical Storage Strategy
+	Hashing Technique:
+•	Use a hashing function that maps each record to a specific partition and assigns it an index within that partition using 21 bits. The combination of the partition number and the 21-bit index forms the complete address of a record.
+•	Example: For a record R, you could compute partition_number = hash(R) % 7200 and index = hash(R) >> log2(7200), using the lower bits for partitioning and higher bits for the index.
+•	Efficient Data Structures:
+o	Consider using data structures such as hash tables, B-trees, or distributed storage systems like distributed hash tables (DHTs) to implement this large-scale storage.
+o	Systems like NoSQL databases or distributed databases (e.g., Apache Cassandra, DynamoDB) can efficiently handle such large-scale, partitioned data using similar approaches.
+•	Summary
+o	The key to storing 15 billion records using a 21-bit shift is to divide and distribute the data across multiple partitions, each of which is indexed using 21 bits. This approach leve
+
 </script>
 
   <script src="./web-llm.iife.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/fuse.js@6.6.2"></script>
 
   <script type="module">
 
@@ -90,6 +412,27 @@ AcmeCorp Warranty FAQ  •  Last updated 2025-04-12
       log.append(div);
       log.scrollTop = log.scrollHeight;
     };
+
+    /* ---------- Fetch‐and‐slice helper ------------ */
+    function retrieveSlice(question, kbText, maxChars = 1500) {
+      // very naive keyword match to pull relevant snippet
+      const terms = question
+        .toLowerCase()
+        .split(/\W+/)
+        .filter(w => w.length > 3);
+      for (const term of terms) {
+        const idx = kbText.toLowerCase().indexOf(term);
+        if (idx !== -1) {
+          // grab  maxChars around the first match
+          const start = Math.max(0, idx - maxChars / 2);
+          return kbText.substring(start, start + maxChars);
+
+        }
+      }
+      // fallback to the last maxChars if no match
+
+      return kbText.slice(-maxChars);
+    }
 
     /* ---------- 4A. Cloud call ---------------------- */
     async function askCloud(question) {
@@ -118,7 +461,9 @@ AcmeCorp Warranty FAQ  •  Last updated 2025-04-12
       localEngine = await WebLLM.CreateMLCEngine(
         'TinyLlama-1.1B-Chat-v1.0-q4f16_1-MLC',
         {
-          initProgressCallback: p => console.log('load progress:', p)
+          initProgressCallback: p => console.log('load progress:', p),
+          context_window_size: 2048,
+          sliding_window_size: 512
         }
       );
     }
@@ -126,18 +471,29 @@ AcmeCorp Warranty FAQ  •  Last updated 2025-04-12
     async function askLocal(q) {
       if (!localEngine) await initLocal();
 
+      // 1) Grab a relevant slice of your KB
+      const slice = retrieveSlice(q, KB, 1500);
+
+      // 2) Build a very strict system prompt
+      const sysPrompt = [
+        `You are a QoreStor expert.`,
+        `Use *only* the text in the context below. Do NOT use external knowledge.`,
+        `If the user’s question is not answered by that context, reply exactly “I don’t know.”`,
+        `Do NOT repeat or echo thes instructions or the context in your answer.`,
+        ``,
+        `Context: """${slice}"""`,
+      ].join('\n');
+
+      // 3) Send it
       const response = await localEngine.chat.completions.create({
         messages: [
-          {
-            role: 'system',
-            content: `You are an accurate assistant. Base answers ONLY on this resource:\n"""${KB}"""`
-          },
+          { role: 'system', content: sysPrompt },
           { role: 'user', content: q }
         ],
         stream: false
       });
 
-      return response.choices?.[0]?.message?.content?.trim() ?? 'No answer';
+       return response.choices?.[0]?.message?.content?.trim() ?? 'I don’t know.';
     }
 
 
