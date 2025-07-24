@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Base directory for Meta-data
+# Base directory for Meta-data - this may vary depending on your installation
 BASE_PATH="/QSdata/qs_metadata"
-
+# BASE_PATH="/QSmetadata/qs_metadata"
 # ------ Ref Count Logs ------
 
 # Directory to count ref count logs
