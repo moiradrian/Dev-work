@@ -220,7 +220,7 @@ find "$BASE_PATH" -maxdepth 1 -type d -not -path "$BASE_PATH" -name '[0-9]*' | w
 done
 
 # only fetch & filter if MODE is set to one of the two
-if [[ "$MODE" == "local" || "$MODE" == "cloud" ]]; then
+if [[ "$MODE" == "--local" || "$MODE" == "--cloud" ]]; then
 
     # grab the full cleaner_adminstats once
     CLEANER_STATS=$(ctrlrpc -p 9911 show.cleaner_adminstats)
