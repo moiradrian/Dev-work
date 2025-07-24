@@ -28,6 +28,7 @@ if [[ -z "$DATA_PATH" ]]; then
     echo "Error: could not determine metadata location." >&2
     exit 1
 fi
+echo
 echo "Main data storage information"
 echo
 echo "Main Data location: $DATA_PATH"
