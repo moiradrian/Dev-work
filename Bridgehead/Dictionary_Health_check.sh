@@ -69,7 +69,7 @@ for k in $(printf '%s\n' "${!max_keys_map[@]}" | sort -n); do
 done
 
 if [[ -z "$size_key" ]]; then
-  echo "Error: no MAX_KEYS defined for dictionary size ≥ ${CEIL_SIZE} GiB." >&2
+  echo "Error: no MAX_KEYS defined for dictionary size ≥ ${CEIL_SIZE} GiB." >&2
   exit 1
 fi
 
