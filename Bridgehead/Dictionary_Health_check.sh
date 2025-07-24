@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
-# Base directory for Meta-data - this may vary depending on your installation
-BASE_PATH="/QSdata/qs_metadata"
-# BASE_PATH="/QSmetadata/qs_metadata"
+
+BASE_PATH=$(system --show \
+            | grep Metadata \
+            | cut -d':' -f2- \
+            | xargs)   # trims leading/trailing whitespace
+
+if [[ -z "$BASE_PATH" ]]; then
+  echo "Error: could not determine metadata location." >&2
+  exit 1
+fi
+echo "Metadata location: $BASE_PATH"
+
 # ------ Ref Count Logs ------
 
 # Directory to count ref count logs
@@ -39,6 +48,13 @@ USED_KEYS=$(ctrlrpc -p 9911 show.dedupe_stats \
             | grep uhd_total_nrecs \
             | awk '{print $NF}')
 
+# Format thousand‐grouping
+if command -v numfmt &>/dev/null; then
+  USED_KEYS=$(numfmt --grouping "$USED_KEYS_RAW")
+else
+  # ensure your locale supports thousands separator (e.g. en_US.UTF-8)
+  USED_KEYS=$(printf "%'d" "$USED_KEYS_RAW")
+fi
 echo "Used Dictionary Keys: $USED_KEYS"
 
 # ------ Compute the current dictionary percentage used ------
