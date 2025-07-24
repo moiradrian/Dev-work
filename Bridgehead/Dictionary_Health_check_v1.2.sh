@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-
+# ------ Metadata location dicovery ------
 BASE_PATH=$(system --show |
     grep Metadata |
     cut -d':' -f2- |
@@ -13,6 +13,7 @@ echo
 echo "Current Dictionary information and cleaning progress"
 echo
 echo "Metadata location: $BASE_PATH"
+
 
 # ------ Meta-data Partition usage ------
 
@@ -31,12 +32,47 @@ fi
 read -r DEVICE SIZE USED AVAIL USEP _ <<<"$PART_USAGE"
 
 #    - Print header + values in columns
-echo
-echo "Metadata Partition Usage:"
 echo "Device: $DEVICE"
+echo "Metadata Partition Usage:"
 printf "%-8s %-8s %-8s %-6s\n" "Size" "Used" "Avail" "Use%"
 printf "%-8s %-8s %-8s %-6s\n" \
     "$SIZE" "$USED" "$AVAIL" "$USEP"
+
+# ------ Main Data Repository discovery ------
+DATA_PATH=$(system --show |
+    grep Repository |
+    cut -d':' -f2- |
+    xargs) # trims leading/trailing whitespace
+
+if [[ -z "$DATA_PATH" ]]; then
+    echo "Error: could not determine metadata location." >&2
+    exit 1
+fi
+echo
+echo "Main Data location: $DATA_PATH"
+
+# ------ Main Data Repository usage ------
+
+# Metadata Partition usage
+#    - Extract first directory level of BASE_PATH (e.g. /QSdata)
+DATA_LEVEL="/$(echo "$DATA_PATH" | cut -d'/' -f2)"
+
+#    - Try to grep that mountpoint in a full df -h
+DATAPART_USAGE=$(df -h | awk -v mnt="$DATA_LEVEL" '$NF==mnt {print}')
+
+#    - Fallback: if no match, ask df for the specific path
+if [[ -z "$DATAPART_USAGE" ]]; then
+    DATAPART_USAGE=$(df -h "$DATA_PATH" | tail -1)
+fi
+
+read -r DATA_DEVICE DATA_SIZE DATA_USED DATA_AVAIL DATA_USEP _ <<<"$DATAPART_USAGE"
+
+#    - Print header + values in columns
+echo "Device: $DATA_DEVICE"
+echo "Data Partition Usage:"
+printf "%-8s %-8s %-8s %-6s\n" "Size" "Used" "Avail" "Use%"
+printf "%-8s %-8s %-8s %-6s\n" \
+    "$DATA_SIZE" "$DATA_USED" "$DATA_AVAIL" "$DATA_USEP"
 
 # ------ Dictionary Size ------
 # File whose size we’ll report
