@@ -1,22 +1,56 @@
 #!/usr/bin/env bash
 
-# ------ Get mode variable for cleaner info ------
-
-MODE="$1"
-
 # ------ General server info ------
 # capture the full output once
 SYS_SHOW=$(system --show)
 
 # print the general info
-echo
 echo "System Information"
 echo "$SYS_SHOW" | awk -F':' \
-    '/^(System Name|Current Time|System ID|Version|Build)/ {
+  '/^(System Name|Current Time|System ID|Version|Build)/ {
      # strip leading/trailing whitespace from the value
      gsub(/^ +| +$/,"",$2)
      printf "%s: %s\n", $1, $2
   }'
+  
+# ------ Metadata location dicovery ------
+BASE_PATH=$(system --show |
+    grep Metadata |
+    cut -d':' -f2- |
+    xargs) # trims leading/trailing whitespace
+
+if [[ -z "$BASE_PATH" ]]; then
+    echo "Error: could not determine metadata location." >&2
+    exit 1
+fi
+echo
+echo "Current Dictionary information and cleaning progress"
+echo
+echo "Metadata location: $BASE_PATH"
+
+
+# ------ Meta-data Partition usage ------
+
+# Metadata Partition usage
+#    - Extract first directory level of BASE_PATH (e.g. /QSdata)
+FIRST_LEVEL="/$(echo "$BASE_PATH" | cut -d'/' -f2)"
+
+#    - Try to grep that mountpoint in a full df -h
+PART_USAGE=$(df -h | awk -v mnt="$FIRST_LEVEL" '$NF==mnt {print}')
+
+#    - Fallback: if no match, ask df for the specific path
+if [[ -z "$PART_USAGE" ]]; then
+    PART_USAGE=$(df -h "$BASE_PATH" | tail -1)
+fi
+
+read -r DEVICE SIZE USED AVAIL USEP _ <<<"$PART_USAGE"
+
+#    - Print header + values in columns
+echo "Device: $DEVICE"
+echo "Metadata Partition Usage:"
+printf "%-8s %-8s %-8s %-6s\n" "Size" "Used" "Avail" "Use%"
+printf "%-8s %-8s %-8s %-6s\n" \
+    "$SIZE" "$USED" "$AVAIL" "$USEP"
 
 # ------ Main Data Repository discovery ------
 DATA_PATH=$(system --show |
@@ -28,7 +62,6 @@ if [[ -z "$DATA_PATH" ]]; then
     echo "Error: could not determine metadata location." >&2
     exit 1
 fi
-echo "Main data storage information"
 echo
 echo "Main Data location: $DATA_PATH"
 
@@ -54,44 +87,6 @@ echo "Data Partition Usage:"
 printf "%-8s %-8s %-8s %-6s\n" "Size" "Used" "Avail" "Use%"
 printf "%-8s %-8s %-8s %-6s\n" \
     "$DATA_SIZE" "$DATA_USED" "$DATA_AVAIL" "$DATA_USEP"
-
-# ------ Metadata location dicovery ------
-BASE_PATH=$(system --show |
-    grep Metadata |
-    cut -d':' -f2- |
-    xargs) # trims leading/trailing whitespace
-
-if [[ -z "$BASE_PATH" ]]; then
-    echo "Error: could not determine metadata location." >&2
-    exit 1
-fi
-echo
-echo "Current metadata information and cleaning progress"
-echo
-echo "Metadata location: $BASE_PATH"
-
-# ------ Meta-data Partition usage ------
-
-# Metadata Partition usage
-#    - Extract first directory level of BASE_PATH (e.g. /QSdata)
-FIRST_LEVEL="/$(echo "$BASE_PATH" | cut -d'/' -f2)"
-
-#    - Try to grep that mountpoint in a full df -h
-PART_USAGE=$(df -h | awk -v mnt="$FIRST_LEVEL" '$NF==mnt {print}')
-
-#    - Fallback: if no match, ask df for the specific path
-if [[ -z "$PART_USAGE" ]]; then
-    PART_USAGE=$(df -h "$BASE_PATH" | tail -1)
-fi
-
-read -r DEVICE SIZE USED AVAIL USEP _ <<<"$PART_USAGE"
-
-#    - Print header + values in columns
-echo "Device: $DEVICE"
-echo "Metadata Partition Usage:"
-printf "%-8s %-8s %-8s %-6s\n" "Size" "Used" "Avail" "Use%"
-printf "%-8s %-8s %-8s %-6s\n" \
-    "$SIZE" "$USED" "$AVAIL" "$USEP"
 
 # ------ Dictionary Size ------
 # File whose size we’ll report
@@ -183,7 +178,7 @@ fi
 # Count only regular files
 COUNT=$(find "$DIR" -type f ! -name '.timestamp*' | wc -l)
 echo
-echo "ref-count logs: $COUNT"
+echo "ref count logs: $COUNT"
 
 # Cleaner stats
 # Header for output
@@ -218,25 +213,3 @@ find "$BASE_PATH" -maxdepth 1 -type d -not -path "$BASE_PATH" -name '[0-9]*' | w
         printf "%-15s %-7s %-7s %-7s %-7s\n" "$sgid" "$pl_count" "$nl_count" "$zl_count" "$cl_count"
     fi
 done
-
-# only fetch & filter if MODE is set to one of the two
-if [[ "$MODE" == "local" || "$MODE" == "cloud" ]]; then
-
-    # grab the full cleaner_adminstats once
-    CLEANER_STATS=$(ctrlrpc -p 9911 show.cleaner_adminstats)
-
-    # filter based on MODE
-    if [[ "$MODE" == "local" ]]; then
-        # print everything up to (but not including) the "Cloud cleaner:" line
-        echo
-        echo "$CLEANER_STATS" | awk '/^Cloud cleaner:/ { exit } { print }'
-    else
-        # print from the "Cloud cleaner:" line through the end
-        echo
-        echo "$CLEANER_STATS" | awk '/^Cloud cleaner:/ { in_cloud=1 } in_cloud'
-    fi
-elif [[ -n "$MODE" ]]; then
-    # user passed something invalid
-    echo "Error: Invalid mode '$MODE'. Use 'local' or 'cloud'." >&2
-    exit 1
-fi
