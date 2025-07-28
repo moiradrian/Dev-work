@@ -227,7 +227,7 @@ if [[ "$MODE" == "--local" || "$MODE" == "--cloud" ]]; then
     CLEANER_STATS=$(ctrlrpc -p 9911 show.cleaner_adminstats)
 
     # filter based on MODE
-    if [[ "$MODE" == "local" ]]; then
+    if [[ "$MODE" == "--local" ]]; then
         # print everything up to (but not including) the "Cloud cleaner:" line
         echo
         echo "$CLEANER_STATS" | awk '/^Cloud cleaner:/ { exit } { print }'
@@ -238,6 +238,6 @@ if [[ "$MODE" == "--local" || "$MODE" == "--cloud" ]]; then
     fi
 elif [[ -n "$MODE" ]]; then
     # user passed something invalid
-    echo "Error: Invalid mode '$MODE'. Use 'local' or 'cloud'." >&2
+    echo "Error: Invalid mode '$MODE'. Use '--local' or '--cloud'." >&2
     exit 1
 fi
