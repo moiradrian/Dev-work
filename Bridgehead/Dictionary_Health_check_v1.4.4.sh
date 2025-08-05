@@ -252,6 +252,7 @@ if [[ -z "$MODE" ]]; then
     echo
     # Print the Aggregate stats section (header + the next 4 lines)
     echo "$CLEANER_STATS" | sed -n '/^Aggregate stats:/,/^$/p'
+    echo
 fi
 
 # then your existing MODE-specific code…
