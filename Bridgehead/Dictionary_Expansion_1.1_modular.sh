@@ -67,7 +67,7 @@ show_progress_bar() {
     sleep 1
 
     # Clear the line
-    printf "\033[1A\033[2K"
+    printf "\r\033[2K"
 }
 
 show_system_info() {
