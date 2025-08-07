@@ -51,19 +51,22 @@ show_progress_bar() {
     local GREEN='\033[0;32m'
     local NC='\033[0m' # No Color
 
-    echo -n "["
-    for i in {1..20}; do
-        sleep 0.15 # ~3 seconds total
-        percent=$((i * 5))
-        printf "#"
-        printf "] %3d%%\r[" "$percent"
+    local total_steps=20
+    local delay=0.15
+    local bar=""
+
+    for ((i = 1; i <= total_steps; i++)); do
+        sleep "$delay"
+        bar+="#" # Append one #
+        percent=$((i * 100 / total_steps))
+        printf "\r[%-20s] %3d%%" "$bar" "$percent"
     done
 
-    # Print final 100% in green
-    echo -e "] ${GREEN}100%${NC}"
+    # Show 100% in green
+    printf "\r[%-20s] ${GREEN}100%%%s\n" "$bar" "$NC"
     sleep 1
 
-    # Clear progress line
+    # Clear the line
     printf "\033[1A\033[2K"
 }
 
