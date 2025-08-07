@@ -47,6 +47,26 @@ declare -A max_keys_map=(
 
 # ---------- Functions ----------
 
+show_progress_bar() {
+    local GREEN='\033[0;32m'
+    local NC='\033[0m' # No Color
+
+    echo -n "["
+    for i in {1..20}; do
+        sleep 0.15 # ~3 seconds total
+        percent=$((i * 5))
+        printf "#"
+        printf "] %3d%%\r[" "$percent"
+    done
+
+    # Print final 100% in green
+    echo -e "] ${GREEN}100%${NC}"
+    sleep 1
+
+    # Clear progress line
+    printf "\033[1A\033[2K"
+}
+
 show_system_info() {
     echo -e "\n${GREEN}System Information${NC}"
     SYS_SHOW=$(system --show)
@@ -74,7 +94,7 @@ get_total_memory() {
 
 show_max_supported_dict_size() {
     echo -e "\n${GREEN}Evaluating Maximum Supported Dictionary Size Based on Memory${NC}"
-
+    show_progress_bar
     declare -A min_mem_required=(
         [64]=8
         [128]=16
