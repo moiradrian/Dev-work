@@ -9,7 +9,7 @@ readonly LOG_FILE="./dictionary_expansion.log"
 log() {
     local timestamp
     timestamp=$(date "+%Y-%m-%d %H:%M:%S")
-    echo "[$timestamp] $*" | tee -a "$LOG_FILE"
+    echo "[$timestamp] $*" >>"$LOG_FILE"
 }
 
 # ---------- Config & Globals ----------
@@ -231,14 +231,19 @@ validate_memory_for_size() {
     required_mem=${min_mem_required[$NEW_SIZE]}
 
     if ((total_mem_gib < required_mem)); then
-        log "ERROR: Insufficient memory for ${NEW_SIZE} GiB — Required: ${required_mem} GiB, Available: ${total_mem_gib} GiB"
-        echo -e "${RED}Error: Insufficient memory for selected dictionary size.${NC}"
+        echo -e "${RED}Insufficient memory for selected dictionary size.${NC}"
         echo "Required: ${required_mem} GiB, Available: ${total_mem_gib} GiB"
-        echo "Please upgrade system memory or choose a smaller dictionary size."
-        exit 1
+        log "Memory validation failed for ${NEW_SIZE} GiB — Required: ${required_mem} GiB, Available: ${total_mem_gib} GiB"
+        echo "Returning to size selection..."
+
+        # Loop back just like reselect
+        collect_dict_expansion_params
+        calculate_projected_usage
+        validate_memory_for_size # repeat check
+        return 0
     else
-        log "Memory validated for ${NEW_SIZE} GiB (Required: ${required_mem} GiB, Available: ${total_mem_gib} GiB)"
         echo -e "${GREEN}Memory Check Passed:${NC} Required ${required_mem} GiB, Available ${total_mem_gib} GiB"
+        log "Memory validated for ${NEW_SIZE} GiB (Required: ${required_mem} GiB, Available: ${total_mem_gib} GiB)"
     fi
 }
 
