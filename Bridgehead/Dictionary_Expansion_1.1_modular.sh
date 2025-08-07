@@ -110,11 +110,57 @@ get_dedupe_stats() {
     echo "Percent Used: $PERCENT_USED %  (lookup size ${size_key} GiB)"
 }
 
+collect_dict_expansion_params() {
+    echo -e "\n${GREEN}Dictionary Expansion Options${NC}"
+    echo "Current dictionary size: ${DICT_SIZE} GiB"
+
+    valid_sizes=(64 128 256 384 640 1520 2176 4224)
+
+    echo "Available dictionary sizes:"
+    printf '%s ' "${valid_sizes[@]}"
+    echo
+
+    while true; do
+        read -r -p "Enter the new desired dictionary size (GiB): " NEW_SIZE
+
+        # Check if it's a valid number from the list
+        if [[ ! " ${valid_sizes[@]} " =~ " ${NEW_SIZE} " ]]; then
+            echo -e "${RED}Invalid selection. Choose from the listed sizes.${NC}"
+            continue
+        fi
+
+        # Compare with current
+        CUR_SIZE_INT=${DICT_SIZE%.*} # truncate decimals
+        if ((NEW_SIZE <= CUR_SIZE_INT)); then
+            echo -e "${RED}New size must be greater than current size (${DICT_SIZE} GiB).${NC}"
+            continue
+        fi
+
+        # Determine step-up
+        step_up=0
+        for size in "${valid_sizes[@]}"; do
+            if ((size > CUR_SIZE_INT && size <= NEW_SIZE)); then
+                ((step_up++))
+            fi
+        done
+
+        echo -e "${GREEN}Dictionary size will increase from ${CUR_SIZE_INT} to ${NEW_SIZE} GiB"
+        echo "Step-up level: $step_up${NC}"
+        break
+    done
+
+    # Export if needed by other functions
+    export NEW_SIZE step_up
+}
+
 confirm_action() {
     read -r -p "This action will stop all QoreStor services. Do you want to continue? [y/N] " response
     case "$response" in
-        [yY][eE][sS]|[yY]) return 0 ;;
-        *) echo "Operation cancelled."; return 1 ;;
+    [yY][eE][sS] | [yY]) return 0 ;;
+    *)
+        echo "Operation cancelled."
+        return 1
+        ;;
     esac
 }
 
@@ -134,6 +180,7 @@ main() {
     get_metadata_path
     get_dict_info
     get_dedupe_stats
+    collect_dict_expansion_params
 
     echo
 
