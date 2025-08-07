@@ -15,6 +15,7 @@ log() {
 # ---------- Config & Globals ----------
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
 NC='\033[0m'
 
 SHOW_ALL_SIZES=false
@@ -303,51 +304,58 @@ collect_dict_expansion_params() {
     all_sizes=(64 128 256 384 640 1520 2176 4224)
     CUR_SIZE_INT=${DICT_SIZE%.*}
 
-    # Build valid_sizes based on memory and above current size
+    # Recalculate available space in GiB for filtering
+    avail_metadata_gib=""
+    if [[ "$AVAIL" =~ ^([0-9.]+)([KMGTP])$ ]]; then
+        size_val="${BASH_REMATCH[1]}"
+        size_unit="${BASH_REMATCH[2]}"
+        case "$size_unit" in
+        K) avail_metadata_gib=$(awk "BEGIN { print $size_val / 1024 / 1024 }") ;;
+        M) avail_metadata_gib=$(awk "BEGIN { print $size_val / 1024 }") ;;
+        G) avail_metadata_gib="$size_val" ;;
+        T) avail_metadata_gib=$(awk "BEGIN { print $size_val * 1024 }") ;;
+        P) avail_metadata_gib=$(awk "BEGIN { print $size_val * 1024 * 1024 }") ;;
+        *)
+            echo "Unknown size unit: $size_unit" >&2
+            exit 1
+            ;;
+        esac
+    else
+        echo "Error: Could not parse available space '$AVAIL'" >&2
+        exit 1
+    fi
+
+    # Build valid sizes
     valid_sizes=()
     for size in "${all_sizes[@]}"; do
-        if ((size > CUR_SIZE_INT && total_mem_gib >= min_mem_required[$size])); then
+        mem_ok=$((total_mem_gib >= min_mem_required[$size]))
+        space_ok=$(awk -v avail="$avail_metadata_gib" -v required="$DICT_SIZE" -v new="$size" \
+            'BEGIN { print (avail >= (required + new)) ? 1 : 0 }')
+
+        if ((size > CUR_SIZE_INT && mem_ok && space_ok)); then
             valid_sizes+=("$size")
         fi
     done
 
     if [[ ${#valid_sizes[@]} -eq 0 ]]; then
-        echo -e "${RED}No larger dictionary sizes are supported with the current memory (${total_mem_gib} GiB).${NC}"
-        log "No valid expansion sizes available above current size (${CUR_SIZE_INT} GiB) with ${total_mem_gib} GiB RAM"
+        echo -e "${RED}No larger dictionary sizes are supported with current memory and metadata space.${NC}"
+        log "No valid expansion sizes available with ${total_mem_gib} GiB RAM and ${avail_metadata_gib} GiB disk"
         exit 1
     fi
 
+    echo "Available dictionary sizes you can upgrade to:"
+    printf '%s ' "${valid_sizes[@]}"
     echo
-
-    if $SHOW_ALL_SIZES; then
-        echo -e "${GREEN}All dictionary sizes (with memory requirements):${NC}"
-        for size in "${all_sizes[@]}"; do
-            required=${min_mem_required[$size]}
-            if ((size == CUR_SIZE_INT)); then
-                echo -e "• ${size} GiB (current size)"
-            elif ((total_mem_gib >= required)); then
-                echo -e "• ${size} GiB (available)"
-            else
-                echo -e "• ${size} GiB (requires ${required} GiB RAM — not available)"
-            fi
-        done
-        echo
-    else
-        echo "Available dictionary sizes you can upgrade to:"
-        printf '%s ' "${valid_sizes[@]}"
-        echo
-    fi
 
     while true; do
         read -r -p "Enter the new desired dictionary size (GiB): " NEW_SIZE
 
-        # Check if it's in the filtered list
         if [[ ! " ${valid_sizes[*]} " =~ " ${NEW_SIZE} " ]]; then
             echo -e "${RED}Invalid selection. Choose from the listed sizes only.${NC}"
             continue
         fi
 
-        # Calculate step-up level
+        # Step-up calculation
         step_up=0
         for size in "${all_sizes[@]}"; do
             if ((size > CUR_SIZE_INT && size <= NEW_SIZE)); then
@@ -358,6 +366,22 @@ collect_dict_expansion_params() {
         echo -e "${GREEN}Dictionary size will increase from ${CUR_SIZE_INT} to ${NEW_SIZE} GiB${NC}"
         echo "Step-up level: $step_up"
         log "User selected ${NEW_SIZE} GiB (step-up: ${step_up})"
+        # Check projected disk usage percentage
+        projected_usage=$(awk -v dict="$DICT_SIZE" -v new="$NEW_SIZE" -v avail="$avail_metadata_gib" \
+            'BEGIN {
+        total_needed = dict + new
+        usage_percent = (total_needed / avail) * 100
+        printf "%.2f", usage_percent
+    }')
+
+        if (($(awk "BEGIN {print ($projected_usage >= 90)}"))); then
+            echo -e "${YELLOW}⚠ WARNING: Projected disk usage will reach ${projected_usage}% of available metadata space.${NC}"
+            echo "Proceed with caution — consider freeing up space before continuing."
+            log "WARNING: Projected metadata usage will be ${projected_usage}%"
+        else
+            echo "Projected metadata usage after expansion: ${projected_usage}%"
+            log "Projected usage OK: ${projected_usage}%"
+        fi
         break
     done
 
@@ -469,6 +493,93 @@ validate_metadata_space() {
     log "Metadata space validated: Required ${required_space} GiB, Available ${avail_gib} GiB"
 }
 
+evaluate_max_supported_size() {
+    echo -e "\n${GREEN}Evaluating Maximum Supported Dictionary Size Based on System Resources${NC}"
+    show_progress_bar
+
+    declare -A min_mem_required=(
+        [64]=8
+        [128]=16
+        [256]=32
+        [384]=38
+        [640]=42
+        [1520]=64
+        [2176]=128
+        [4224]=192
+    )
+
+    all_sizes=(64 128 256 384 640 1520 2176 4224)
+    CUR_SIZE_INT=${DICT_SIZE%.*}
+
+    mem_limit=""
+    disk_limit=""
+
+    # 1. Memory-based filtering
+    for size in "${all_sizes[@]}"; do
+        if ((total_mem_gib >= min_mem_required[$size])); then
+            mem_limit=$size
+        else
+            break
+        fi
+    done
+
+    # 2. Disk-based filtering
+    disk_limit=""
+    for size in "${all_sizes[@]}"; do
+        space_ok=$(awk -v avail="$avail_metadata_gib" -v current="$DICT_SIZE" -v new="$size" \
+            'BEGIN { print (avail >= (current + new)) ? 1 : 0 }')
+        echo "Checked size $size GiB → space OK? $space_ok"
+        if [[ "$space_ok" -eq 1 ]]; then
+            disk_limit=$size
+        fi
+    done
+
+    # 3. Determine effective max
+    if [[ -z "$mem_limit" && -z "$disk_limit" ]]; then
+        effective_limit="N/A"
+        reason="both"
+    elif [[ -z "$mem_limit" ]]; then
+        effective_limit="$disk_limit"
+        reason="memory"
+    elif [[ -z "$disk_limit" ]]; then
+        effective_limit="$mem_limit"
+        reason="disk"
+    else
+        # Both exist, so pick the more limiting one
+        if ((mem_limit < disk_limit)); then
+            effective_limit=$mem_limit
+            reason="memory"
+        elif ((disk_limit < mem_limit)); then
+            effective_limit=$disk_limit
+            reason="disk"
+        else
+            effective_limit=$mem_limit # same value
+            reason="neither"
+        fi
+    fi
+
+    echo -e "\nMaximum dictionary size supported based on memory     : ${mem_limit:-N/A} GiB"
+    echo "Maximum dictionary size supported based on disk space : ${disk_limit:-N/A} GiB"
+
+    if [[ "$effective_limit" != "N/A" ]]; then
+        echo -e "${GREEN}Effective maximum dictionary size: ${effective_limit} GiB${NC}"
+    else
+        echo -e "${RED}No dictionary expansion possible due to system constraints.${NC}"
+        exit 1
+    fi
+
+    case "$reason" in
+    memory) echo -e "→ ${YELLOW}Limiting factor: memory${NC}" ;;
+    disk) echo -e "→ ${YELLOW}Limiting factor: disk space${NC}" ;;
+    both) echo -e "→ ${RED}Limiting factor: both memory and disk${NC}" ;;
+    *) echo -e "→ No limiting factor detected" ;;
+    esac
+
+    log "Max supported dict size: $effective_limit GiB (limited by $reason)"
+
+    export effective_limit
+}
+
 confirm_action() {
     read -r -p "This action will stop all QoreStor services. Do you want to continue? [y/N] " response
     case "$response" in
@@ -503,6 +614,7 @@ confirm_expansion_plan() {
             collect_dict_expansion_params
             calculate_projected_usage
             validate_memory_for_size
+            validate_metadata_space
             confirm_expansion_plan # recursive call
             return $?              # bubble up user's final answer
             ;;
@@ -536,8 +648,9 @@ main() {
     get_metadata_path
     get_metadata_usage
     get_dict_info
-    show_max_supported_dict_size
+    # show_max_supported_dict_size
     get_dedupe_stats
+    evaluate_max_supported_size
     collect_dict_expansion_params
     calculate_projected_usage
     validate_memory_for_size
