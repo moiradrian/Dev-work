@@ -145,12 +145,41 @@ collect_dict_expansion_params() {
         done
 
         echo -e "${GREEN}Dictionary size will increase from ${CUR_SIZE_INT} to ${NEW_SIZE} GiB"
-        echo "Step-up level: $step_up${NC}"
+        echo -e "Step-up level: $step_up${NC}"
         break
     done
 
     # Export if needed by other functions
     export NEW_SIZE step_up
+}
+
+calculate_projected_usage() {
+    echo -e "\n${GREEN}Projected Dictionary Usage After Expansion${NC}"
+
+    NEW_MAX_KEYS=${max_keys_map[$NEW_SIZE]}
+    if [[ -z "$NEW_MAX_KEYS" ]]; then
+        echo -e "${RED}Error: No MAX_KEYS found for size ${NEW_SIZE} GiB${NC}" >&2
+        exit 1
+    fi
+
+    if command -v numfmt &>/dev/null; then
+        NEW_MAX_KEYS_FMT=$(numfmt --grouping "$NEW_MAX_KEYS")
+    else
+        NEW_MAX_KEYS_FMT=$(printf "%'d" "$NEW_MAX_KEYS")
+    fi
+
+    # Calculate new % used
+    NEW_PERCENT_USED=$(awk -v used="$USED_KEYS_RAW" -v max="$NEW_MAX_KEYS" \
+        'BEGIN {
+            if (max <= 0) {
+                print "N/A"
+            } else {
+                printf "%.2f", (used/max)*100
+            }
+        }')
+
+    echo "New MAX KEYS: $NEW_MAX_KEYS_FMT"
+    echo "Projected Percent Used: $NEW_PERCENT_USED %  (based on ${NEW_SIZE} GiB)"
 }
 
 confirm_action() {
