@@ -204,6 +204,40 @@ get_metadata_path() {
     echo -e "\nMetadata location: $BASE_PATH"
 }
 
+get_metadata_usage() {
+    echo -e "\n${GREEN}Checking Metadata Partition Usage${NC}"
+
+    # Get the mount point or use path directly
+    FIRST_LEVEL="/$(echo "$BASE_PATH" | cut -d'/' -f2)"
+    PART_USAGE=$(df -h | awk -v mnt="$FIRST_LEVEL" '$NF==mnt {print}')
+
+    # Fallback if mountpoint doesn't match
+    if [[ -z "$PART_USAGE" ]]; then
+        PART_USAGE=$(df -h "$BASE_PATH" | tail -1)
+    fi
+
+    if [[ -z "$PART_USAGE" ]]; then
+        echo -e "${RED}Error: Unable to determine metadata partition usage for: $BASE_PATH${NC}"
+        log "ERROR: df returned empty for $BASE_PATH"
+        exit 1
+    fi
+
+    read -r DEVICE SIZE USED AVAIL USEP _ <<<"$PART_USAGE"
+
+    if [[ -z "$AVAIL" ]]; then
+        echo -e "${RED}Error: Could not extract available space from metadata partition.${NC}"
+        echo "Debug: PART_USAGE='$PART_USAGE'"
+        exit 1
+    fi
+
+    echo "Device: $DEVICE"
+    echo "Metadata Partition Usage:"
+    printf "%-8s %-8s %-8s %-6s\n" "Size" "Used" "Avail" "Use%"
+    printf "%-8s %-8s %-8s %-6s\n" "$SIZE" "$USED" "$AVAIL" "$USEP"
+
+    log "Metadata partition available space: $AVAIL"
+}
+
 get_dict_info() {
     echo -e "\nDictionary Info:"
     DICT_FILE="${BASE_PATH}/dict2"
@@ -500,6 +534,7 @@ main() {
     get_main_data_path
     get_storage_usage
     get_metadata_path
+    get_metadata_usage
     get_dict_info
     show_max_supported_dict_size
     get_dedupe_stats
