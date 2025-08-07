@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# ---------- Constraints ----------
+readonly PAGE_SIZE=11
+
 # ---------- Config & Globals ----------
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -31,6 +34,21 @@ show_system_info() {
         gsub(/^ +| +$/, "", $2)
         printf "%s: %s\n", $1, $2
     }'
+}
+
+get_total_memory() {
+    echo -e "\n${GREEN}System Memory Info${NC}"
+
+    mem_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+    if [[ -z "$mem_kb" ]]; then
+        echo "Error: Unable to determine system memory." >&2
+        exit 1
+    fi
+
+    total_mem_gib=$(awk -v kb="$mem_kb" 'BEGIN { print int((kb / 1024 / 1024) + 0.999) }')
+    echo "Total Installed Memory: ${total_mem_gib} GiB"
+
+    export total_mem_gib
 }
 
 get_main_data_path() {
@@ -116,7 +134,7 @@ collect_dict_expansion_params() {
 
     valid_sizes=(64 128 256 384 640 1520 2176 4224)
 
-    echo "Available dictionary sizes:"
+    echo "Available dictionary sizes in GiB:"
     printf '%s ' "${valid_sizes[@]}"
     echo
 
@@ -182,6 +200,34 @@ calculate_projected_usage() {
     echo "Projected Percent Used: $NEW_PERCENT_USED %  (based on ${NEW_SIZE} GiB)"
 }
 
+validate_memory_for_size() {
+    echo -e "\n${GREEN}Validating Memory Requirements for ${NEW_SIZE} GiB Dictionary${NC}"
+
+    # Define memory requirements
+    declare -A min_mem_required=(
+        [64]=8
+        [128]=16
+        [256]=32
+        [384]=38
+        [640]=42
+        [1520]=64
+        [2176]=128
+        [4224]=192
+    )
+
+    required_mem=${min_mem_required[$NEW_SIZE]}
+
+    if (( total_mem_gib < required_mem )); then
+        echo -e "${RED}Error: Insufficient memory for selected dictionary size.${NC}"
+        echo "Required: ${required_mem} GiB, Available: ${total_mem_gib} GiB"
+        echo "Please upgrade system memory or choose a smaller dictionary size."
+        exit 1
+    else
+        echo -e "${GREEN}Memory Check Passed:${NC} Required ${required_mem} GiB, Available ${total_mem_gib} GiB"
+    fi
+}
+
+
 confirm_action() {
     read -r -p "This action will stop all QoreStor services. Do you want to continue? [y/N] " response
     case "$response" in
@@ -199,6 +245,7 @@ confirm_expansion_plan() {
     echo "Current Dictionary Size : ${DICT_SIZE} GiB"
     echo "Selected New Size        : ${NEW_SIZE} GiB"
     echo "Step-up Level            : $step_up"
+    echo "Page Size               : ${PAGE_SIZE}"
     echo "Projected Usage          : ${NEW_PERCENT_USED} %"
 
     echo
@@ -237,6 +284,7 @@ stop_services() {
 
 main() {
     show_system_info
+    get_total_memory
     get_main_data_path
     get_storage_usage
     get_metadata_path
@@ -244,6 +292,7 @@ main() {
     get_dedupe_stats
     collect_dict_expansion_params
     calculate_projected_usage
+    validate_memory_for_size
     confirm_expansion_plan
 
     echo
