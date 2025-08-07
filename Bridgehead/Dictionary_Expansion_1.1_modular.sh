@@ -61,6 +61,83 @@ get_total_memory() {
     log "Total Installed Memory: ${total_mem_gib} GiB"
 }
 
+show_max_supported_dict_size() {
+    echo -e "\n${GREEN}Evaluating Maximum Supported Dictionary Size Based on Memory${NC}"
+
+    declare -A min_mem_required=(
+        [64]=8
+        [128]=16
+        [256]=32
+        [384]=38
+        [640]=42
+        [1520]=64
+        [2176]=128
+        [4224]=192
+    )
+
+    valid_sizes=(64 128 256 384 640 1520 2176 4224)
+
+    # Determine max size supported by available memory
+    max_supported_size=""
+    for size in "${valid_sizes[@]}"; do
+        required=${min_mem_required[$size]}
+        if ((total_mem_gib >= required)); then
+            max_supported_size=$size
+        fi
+    done
+
+    if [[ -z "$max_supported_size" ]]; then
+        echo -e "${RED}Warning: No dictionary size is supported with current memory (${total_mem_gib} GiB).${NC}"
+        log "No dictionary size supported for system with ${total_mem_gib} GiB RAM"
+        exit 1
+    fi
+
+    CUR_SIZE_INT=${DICT_SIZE%.*}
+
+    if ((CUR_SIZE_INT >= max_supported_size)); then
+        echo -e "${GREEN}Current dictionary size (${DICT_SIZE} GiB) is already at or above the maximum supported: ${max_supported_size} GiB${NC}"
+        log "Current dictionary size (${DICT_SIZE} GiB) is at or above supported max (${max_supported_size} GiB)"
+
+        # Determine the next size in the list
+        next_index=-1
+        for i in "${!valid_sizes[@]}"; do
+            if ((valid_sizes[i] > CUR_SIZE_INT)); then
+                next_index=$i
+                break
+            fi
+        done
+
+        if ((next_index != -1)); then
+            next_size=${valid_sizes[$next_index]}
+            next_required_mem=${min_mem_required[$next_size]}
+            next_max_keys=${max_keys_map[$next_size]}
+
+            # Calculate projected % usage
+            next_percent_used=$(awk -v used="$USED_KEYS_RAW" -v max="$next_max_keys" \
+                'BEGIN { printf "%.2f", (max > 0 ? used / max * 100 : 0) }')
+
+            echo -e "\n${YELLOW}To expand to the next size (${next_size} GiB):${NC}"
+            echo "• Required memory: ${next_required_mem} GiB"
+            echo "• Projected usage: ${next_percent_used} %"
+
+            if (($(awk 'BEGIN {exit ARGV[1] > 85 ? 0 : 1}' "$next_percent_used"))); then
+                echo -e "${RED}⚠️  Warning: Projected usage after expansion would still be over 85%.${NC}"
+                echo -e "  This expansion may not provide significant headroom."
+                log "WARNING: Projected usage after expanding to ${next_size} GiB would be ${next_percent_used}%"
+            fi
+
+            log "Next size ${next_size} GiB requires ${next_required_mem} GiB RAM; projected usage: ${next_percent_used}%"
+        else
+            echo -e "${YELLOW}You are already at the maximum configurable dictionary size available.${NC}"
+            log "User is at the highest dictionary size available. No further upgrades possible."
+        fi
+
+    else
+        echo -e "${GREEN}Maximum dictionary size supported based on available memory: ${max_supported_size} GiB${NC}"
+        log "Max supported dictionary size based on ${total_mem_gib} GiB RAM: ${max_supported_size} GiB"
+    fi
+}
+
 get_main_data_path() {
     DATA_PATH=$(system --show | grep Repository | cut -d':' -f2- | xargs)
     if [[ -z "$DATA_PATH" ]]; then
@@ -313,6 +390,7 @@ main() {
     get_storage_usage
     get_metadata_path
     get_dict_info
+    show_max_supported_dict_size
     get_dedupe_stats
     collect_dict_expansion_params
     calculate_projected_usage
