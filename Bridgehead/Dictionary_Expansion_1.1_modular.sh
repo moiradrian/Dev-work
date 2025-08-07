@@ -2,6 +2,15 @@
 
 # ---------- Constraints ----------
 readonly PAGE_SIZE=11
+readonly LOG_FILE="./dictionary_expansion.log"
+
+# ------ Set up logging ------
+
+log() {
+    local timestamp
+    timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+    echo "[$timestamp] $*" | tee -a "$LOG_FILE"
+}
 
 # ---------- Config & Globals ----------
 RED='\033[0;31m'
@@ -49,6 +58,7 @@ get_total_memory() {
     echo "Total Installed Memory: ${total_mem_gib} GiB"
 
     export total_mem_gib
+    log "Total Installed Memory: ${total_mem_gib} GiB"
 }
 
 get_main_data_path() {
@@ -166,6 +176,8 @@ collect_dict_expansion_params() {
         echo -e "Step-up level: $step_up${NC}"
         break
     done
+    log "User selected new dictionary size: ${NEW_SIZE} GiB"
+    log "Step-up level: $step_up"
 
     # Export if needed by other functions
     export NEW_SIZE step_up
@@ -198,6 +210,7 @@ calculate_projected_usage() {
 
     echo "New MAX KEYS: $NEW_MAX_KEYS_FMT"
     echo "Projected Percent Used: $NEW_PERCENT_USED %  (based on ${NEW_SIZE} GiB)"
+    log "Projected percent used for ${NEW_SIZE} GiB: ${NEW_PERCENT_USED}%"
 }
 
 validate_memory_for_size() {
@@ -217,16 +230,17 @@ validate_memory_for_size() {
 
     required_mem=${min_mem_required[$NEW_SIZE]}
 
-    if (( total_mem_gib < required_mem )); then
+    if ((total_mem_gib < required_mem)); then
+        log "ERROR: Insufficient memory for ${NEW_SIZE} GiB — Required: ${required_mem} GiB, Available: ${total_mem_gib} GiB"
         echo -e "${RED}Error: Insufficient memory for selected dictionary size.${NC}"
         echo "Required: ${required_mem} GiB, Available: ${total_mem_gib} GiB"
         echo "Please upgrade system memory or choose a smaller dictionary size."
         exit 1
     else
+        log "Memory validated for ${NEW_SIZE} GiB (Required: ${required_mem} GiB, Available: ${total_mem_gib} GiB)"
         echo -e "${GREEN}Memory Check Passed:${NC} Required ${required_mem} GiB, Available ${total_mem_gib} GiB"
     fi
 }
-
 
 confirm_action() {
     read -r -p "This action will stop all QoreStor services. Do you want to continue? [y/N] " response
@@ -253,16 +267,20 @@ confirm_expansion_plan() {
         read -r -p "Proceed with expansion? (yes / reselect / cancel) [cancel]: " decision
         case "$decision" in
         [yY][eE][sS] | [yY])
+            log "User confirmed to proceed with expansion."
             return 0 # proceed
             ;;
         [rR][eE][sS][eE][lL][eE][cC][tT])
+            log "User chose to reselect dictionary size."
             echo -e "${GREEN}Reselecting dictionary size...${NC}"
             collect_dict_expansion_params
             calculate_projected_usage
+            validate_memory_for_size
             confirm_expansion_plan # recursive call
             return $?              # bubble up user's final answer
             ;;
         "" | [cC][aA][nN][cC][eE][lL])
+            log "User cancelled the operation."
             echo "Operation cancelled by user."
             exit 1
             ;;
@@ -278,6 +296,7 @@ stop_services() {
     # sudo systemctl stop ocards
     echo "[TEST MODE] faked stopping of service"
     echo "'ocards' service stopped."
+    log "QoreStor services stopped. (actual or simulated)"
 }
 
 # ---------- Main Entry Point ----------
