@@ -176,7 +176,14 @@ PERCENT_USED=$(awk -v used="$USED_KEYS_RAW" -v max="$MAX_KEYS" \
   }')
 echo "Percent Used: $PERCENT_USED %  (using lookup size ${size_key} GiB)"
 
+
 # ---------- End of showing current dictionary size ----------
+
+
+# ---------- Gather Information ----------
+# Function to get parameters for dictionary expansion.
+
+
 
 confirm_action() {
     read -r -p "This action will stop all QoreStor services. Do you want to continue? [y/N] " response
