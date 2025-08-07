@@ -193,6 +193,39 @@ confirm_action() {
     esac
 }
 
+confirm_expansion_plan() {
+    echo
+    echo -e "${GREEN}Summary of Proposed Expansion:${NC}"
+    echo "Current Dictionary Size : ${DICT_SIZE} GiB"
+    echo "Selected New Size        : ${NEW_SIZE} GiB"
+    echo "Step-up Level            : $step_up"
+    echo "Projected Usage          : ${NEW_PERCENT_USED} %"
+
+    echo
+    while true; do
+        read -r -p "Proceed with expansion? (yes / reselect / cancel) [cancel]: " decision
+        case "$decision" in
+        [yY][eE][sS] | [yY])
+            return 0 # proceed
+            ;;
+        [rR][eE][sS][eE][lL][eE][cC][tT])
+            echo -e "${GREEN}Reselecting dictionary size...${NC}"
+            collect_dict_expansion_params
+            calculate_projected_usage
+            confirm_expansion_plan # recursive call
+            return $?              # bubble up user's final answer
+            ;;
+        "" | [cC][aA][nN][cC][eE][lL])
+            echo "Operation cancelled by user."
+            exit 1
+            ;;
+        *)
+            echo "Invalid option. Please type 'yes', 'reselect', or 'cancel'."
+            ;;
+        esac
+    done
+}
+
 stop_services() {
     echo "Stopping QoreStor services..."
     # sudo systemctl stop ocards
@@ -211,6 +244,7 @@ main() {
     get_dedupe_stats
     collect_dict_expansion_params
     calculate_projected_usage
+    confirm_expansion_plan
 
     echo
 
