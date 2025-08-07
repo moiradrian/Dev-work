@@ -17,6 +17,17 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 
+SHOW_ALL_SIZES=false
+
+# Parse CLI flags
+for arg in "$@"; do
+    case "$arg" in
+    --show-all-sizes)
+        SHOW_ALL_SIZES=true
+        ;;
+    esac
+done
+
 declare DATA_PATH BASE_PATH DATA_LEVEL FIRST_LEVEL
 declare DATA_DEVICE DATA_SIZE DATA_USED DATA_AVAIL DATA_USEP
 declare DEVICE SIZE USED AVAIL USEP
@@ -219,44 +230,78 @@ collect_dict_expansion_params() {
     echo -e "\n${GREEN}Dictionary Expansion Options${NC}"
     echo "Current dictionary size: ${DICT_SIZE} GiB"
 
-    valid_sizes=(64 128 256 384 640 1520 2176 4224)
+    declare -A min_mem_required=(
+        [64]=8
+        [128]=16
+        [256]=32
+        [384]=38
+        [640]=42
+        [1520]=64
+        [2176]=128
+        [4224]=192
+    )
 
-    echo "Available dictionary sizes in GiB:"
-    printf '%s ' "${valid_sizes[@]}"
+    all_sizes=(64 128 256 384 640 1520 2176 4224)
+    CUR_SIZE_INT=${DICT_SIZE%.*}
+
+    # Build valid_sizes based on memory and above current size
+    valid_sizes=()
+    for size in "${all_sizes[@]}"; do
+        if ((size > CUR_SIZE_INT && total_mem_gib >= min_mem_required[$size])); then
+            valid_sizes+=("$size")
+        fi
+    done
+
+    if [[ ${#valid_sizes[@]} -eq 0 ]]; then
+        echo -e "${RED}No larger dictionary sizes are supported with the current memory (${total_mem_gib} GiB).${NC}"
+        log "No valid expansion sizes available above current size (${CUR_SIZE_INT} GiB) with ${total_mem_gib} GiB RAM"
+        exit 1
+    fi
+
     echo
+
+    if $SHOW_ALL_SIZES; then
+        echo -e "${GREEN}All dictionary sizes (with memory requirements):${NC}"
+        for size in "${all_sizes[@]}"; do
+            required=${min_mem_required[$size]}
+            if ((size == CUR_SIZE_INT)); then
+                echo -e "• ${size} GiB (current size)"
+            elif ((total_mem_gib >= required)); then
+                echo -e "• ${size} GiB (available)"
+            else
+                echo -e "• ${size} GiB (requires ${required} GiB RAM — not available)"
+            fi
+        done
+        echo
+    else
+        echo "Available dictionary sizes you can upgrade to:"
+        printf '%s ' "${valid_sizes[@]}"
+        echo
+    fi
 
     while true; do
         read -r -p "Enter the new desired dictionary size (GiB): " NEW_SIZE
 
-        # Check if it's a valid number from the list
-        if [[ ! " ${valid_sizes[@]} " =~ " ${NEW_SIZE} " ]]; then
-            echo -e "${RED}Invalid selection. Choose from the listed sizes.${NC}"
+        # Check if it's in the filtered list
+        if [[ ! " ${valid_sizes[*]} " =~ " ${NEW_SIZE} " ]]; then
+            echo -e "${RED}Invalid selection. Choose from the listed sizes only.${NC}"
             continue
         fi
 
-        # Compare with current
-        CUR_SIZE_INT=${DICT_SIZE%.*} # truncate decimals
-        if ((NEW_SIZE <= CUR_SIZE_INT)); then
-            echo -e "${RED}New size must be greater than current size (${DICT_SIZE} GiB).${NC}"
-            continue
-        fi
-
-        # Determine step-up
+        # Calculate step-up level
         step_up=0
-        for size in "${valid_sizes[@]}"; do
+        for size in "${all_sizes[@]}"; do
             if ((size > CUR_SIZE_INT && size <= NEW_SIZE)); then
                 ((step_up++))
             fi
         done
 
-        echo -e "${GREEN}Dictionary size will increase from ${CUR_SIZE_INT} to ${NEW_SIZE} GiB"
-        echo -e "Step-up level: $step_up${NC}"
+        echo -e "${GREEN}Dictionary size will increase from ${CUR_SIZE_INT} to ${NEW_SIZE} GiB${NC}"
+        echo "Step-up level: $step_up"
+        log "User selected ${NEW_SIZE} GiB (step-up: ${step_up})"
         break
     done
-    log "User selected new dictionary size: ${NEW_SIZE} GiB"
-    log "Step-up level: $step_up"
 
-    # Export if needed by other functions
     export NEW_SIZE step_up
 }
 
