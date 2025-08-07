@@ -1,5 +1,7 @@
 #!/bin/bash
-
+# ------ General server info ------
+# capture the full output once
+SYS_SHOW=$(system --show)
 # print the general info
 echo
 echo "System Information"
