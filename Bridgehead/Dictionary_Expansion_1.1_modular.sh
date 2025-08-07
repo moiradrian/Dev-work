@@ -49,24 +49,26 @@ declare -A max_keys_map=(
 
 show_progress_bar() {
     local GREEN='\033[0;32m'
-    local NC='\033[0m' # No Color
+    local NC='\033[0m'
 
     local total_steps=20
     local delay=0.15
     local bar=""
+    local percent=0
 
     for ((i = 1; i <= total_steps; i++)); do
         sleep "$delay"
-        bar+="#" # Append one #
+        bar+="#"
         percent=$((i * 100 / total_steps))
         printf "\r[%-20s] %3d%%" "$bar" "$percent"
     done
 
-    # Show 100% in green
-    printf "\r[%-20s] ${GREEN}100%%%s\n" "$bar" "$NC"
+    # Final green "100%" safely printed using correct arguments
+    printf "\r[%-20s] %b%3d%%%b" "$bar" "$GREEN" 100 "$NC"
+
     sleep 1
 
-    # Clear the line
+    # Clear the line cleanly
     printf "\r\033[2K"
 }
 
@@ -392,6 +394,47 @@ validate_memory_for_size() {
     fi
 }
 
+validate_metadata_space() {
+    echo -e "\n${GREEN}Validating Metadata Partition Space for Expansion${NC}"
+    show_progress_bar
+    # Convert AVAIL (e.g., 42G) to raw number in GiB
+    if [[ "$AVAIL" =~ ^([0-9.]+)([KMGTP])$ ]]; then
+        size_val="${BASH_REMATCH[1]}"
+        size_unit="${BASH_REMATCH[2]}"
+        case "$size_unit" in
+        K) avail_gib=$(awk "BEGIN { print $size_val / 1024 / 1024 }") ;;
+        M) avail_gib=$(awk "BEGIN { print $size_val / 1024 }") ;;
+        G) avail_gib="$size_val" ;;
+        T) avail_gib=$(awk "BEGIN { print $size_val * 1024 }") ;;
+        P) avail_gib=$(awk "BEGIN { print $size_val * 1024 * 1024 }") ;;
+        *)
+            echo "Unknown size unit: $size_unit" >&2
+            exit 1
+            ;;
+        esac
+    else
+        echo "Error: Could not parse available space '$AVAIL'" >&2
+        exit 1
+    fi
+
+    required_space=$(awk "BEGIN { print $DICT_SIZE + $NEW_SIZE }")
+    space_ok=$(awk -v avail="$avail_gib" -v required="$required_space" \
+        'BEGIN { print (avail >= required) ? 1 : 0 }')
+
+    echo "Available space: ${avail_gib} GiB"
+    echo "Required space : ${required_space} GiB (dict2 + new dict-${NEW_SIZE}GiB)"
+
+    if [[ "$space_ok" -ne 1 ]]; then
+        echo -e "${RED}Error: Not enough space on the metadata partition to perform expansion.${NC}"
+        echo "Please free up space or expand storage before proceeding."
+        log "ERROR: Not enough metadata space. Required: ${required_space} GiB, Available: ${avail_gib} GiB"
+        exit 1
+    fi
+
+    echo -e "${GREEN}Sufficient space available to proceed with expansion.${NC}"
+    log "Metadata space validated: Required ${required_space} GiB, Available ${avail_gib} GiB"
+}
+
 confirm_action() {
     read -r -p "This action will stop all QoreStor services. Do you want to continue? [y/N] " response
     case "$response" in
@@ -463,6 +506,7 @@ main() {
     collect_dict_expansion_params
     calculate_projected_usage
     validate_memory_for_size
+    validate_metadata_space
     confirm_expansion_plan
 
     echo
