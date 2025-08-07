@@ -210,6 +210,7 @@ main() {
     get_dict_info
     get_dedupe_stats
     collect_dict_expansion_params
+    calculate_projected_usage
 
     echo
 
