@@ -454,19 +454,16 @@ validate_memory_for_size() {
     fi
 }
 
-validate_metadata_space() {
-    echo -e "\n${GREEN}Validating Metadata Partition Space for Expansion${NC}"
-    show_progress_bar
-    # Convert AVAIL (e.g., 42G) to raw number in GiB
+compute_avail_metadata_gib() {
     if [[ "$AVAIL" =~ ^([0-9.]+)([KMGTP])$ ]]; then
         size_val="${BASH_REMATCH[1]}"
         size_unit="${BASH_REMATCH[2]}"
         case "$size_unit" in
-        K) avail_gib=$(awk "BEGIN { print $size_val / 1024 / 1024 }") ;;
-        M) avail_gib=$(awk "BEGIN { print $size_val / 1024 }") ;;
-        G) avail_gib="$size_val" ;;
-        T) avail_gib=$(awk "BEGIN { print $size_val * 1024 }") ;;
-        P) avail_gib=$(awk "BEGIN { print $size_val * 1024 * 1024 }") ;;
+        K) avail_metadata_gib=$(awk "BEGIN { print $size_val / 1024 / 1024 }") ;;
+        M) avail_metadata_gib=$(awk "BEGIN { print $size_val / 1024 }") ;;
+        G) avail_metadata_gib="$size_val" ;;
+        T) avail_metadata_gib=$(awk "BEGIN { print $size_val * 1024 }") ;;
+        P) avail_metadata_gib=$(awk "BEGIN { print $size_val * 1024 * 1024 }") ;;
         *)
             echo "Unknown size unit: $size_unit" >&2
             exit 1
@@ -477,6 +474,13 @@ validate_metadata_space() {
         exit 1
     fi
 
+    export avail_metadata_gib
+    log "Parsed available metadata space: ${avail_metadata_gib} GiB"
+}
+
+
+validate_metadata_space() {
+compute_avail_metadata_gib
     required_space=$(awk "BEGIN { print $DICT_SIZE_RAW + $NEW_SIZE }")
     space_ok=$(awk -v avail="$avail_gib" -v required="$required_space" \
         'BEGIN { print (avail >= required) ? 1 : 0 }')
@@ -649,6 +653,7 @@ main() {
     get_storage_usage
     get_metadata_path
     get_metadata_usage
+    compute_avail_metadata_gib
     get_dict_info
     # show_max_supported_dict_size
     get_dedupe_stats
