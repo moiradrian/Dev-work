@@ -73,6 +73,17 @@ show_progress_bar() {
     printf "\r\033[2K"
 }
 
+format_gib() {
+    local raw="$1"
+    # Trim trailing .00 if present
+    if [[ "$raw" =~ ^([0-9]+)\.00$ ]]; then
+        echo "${BASH_REMATCH[1]}"
+    else
+        # If decimal part exists, keep it (e.g., 64.25)
+        echo "$raw"
+    fi
+}
+
 show_system_info() {
     echo -e "\n${GREEN}System Information${NC}"
     SYS_SHOW=$(system --show)
@@ -132,8 +143,8 @@ show_max_supported_dict_size() {
     CUR_SIZE_INT=${DICT_SIZE%.*}
 
     if ((CUR_SIZE_INT >= max_supported_size)); then
-        echo -e "${GREEN}Current dictionary size (${DICT_SIZE} GiB) is already at or above the maximum supported: ${max_supported_size} GiB${NC}"
-        log "Current dictionary size (${DICT_SIZE} GiB) is at or above supported max (${max_supported_size} GiB)"
+        echo -e "${GREEN}Current dictionary size ($(format_gib "$DICT_SIZE_RAW") GiB) is already at or above the maximum supported: $(format_gib "$max_supported_size") GiB${NC}"
+        log "Current dictionary size ($(format_gib "$DICT_SIZE_RAW") GiB) is at or above supported max $(format_gib "$max_supported_size") GiB"
 
         # Determine the next size in the list
         next_index=-1
@@ -252,7 +263,7 @@ get_dict_info() {
     DICT_SIZE_RAW=$(awk "BEGIN { printf \"%.2f\", $BYTES/1024/1024/1024 }")
     DICT_SIZE="${DICT_SIZE_RAW} GiB"
 
-    echo "Dictionary Size: $DICT_SIZE GiB"
+    echo "Dictionary Size: $(format_gib "$DICT_SIZE_RAW") GiB"
 
     for k in $(printf '%s\n' "${!max_keys_map[@]}" | sort -n); do
         if ((FLOOR_GIB >= k)); then size_key=$k; else break; fi
@@ -290,7 +301,7 @@ get_dedupe_stats() {
 
 collect_dict_expansion_params() {
     echo -e "\n${GREEN}Dictionary Expansion Options${NC}"
-    echo "Current dictionary size: ${DICT_SIZE} GiB"
+    echo "Current dictionary size: $(format_gib "$DICT_SIZE_RAW") GiB"
 
     declare -A min_mem_required=(
         [64]=8
@@ -307,25 +318,7 @@ collect_dict_expansion_params() {
     CUR_SIZE_INT=${DICT_SIZE%.*}
 
     # Recalculate available space in GiB for filtering
-    avail_metadata_gib=""
-    if [[ "$AVAIL" =~ ^([0-9.]+)([KMGTP])$ ]]; then
-        size_val="${BASH_REMATCH[1]}"
-        size_unit="${BASH_REMATCH[2]}"
-        case "$size_unit" in
-        K) avail_metadata_gib=$(awk "BEGIN { print $size_val / 1024 / 1024 }") ;;
-        M) avail_metadata_gib=$(awk "BEGIN { print $size_val / 1024 }") ;;
-        G) avail_metadata_gib="$size_val" ;;
-        T) avail_metadata_gib=$(awk "BEGIN { print $size_val * 1024 }") ;;
-        P) avail_metadata_gib=$(awk "BEGIN { print $size_val * 1024 * 1024 }") ;;
-        *)
-            echo "Unknown size unit: $size_unit" >&2
-            exit 1
-            ;;
-        esac
-    else
-        echo "Error: Could not parse available space '$AVAIL'" >&2
-        exit 1
-    fi
+    compute_avail_metadata_gib
 
     # Build valid sizes
     valid_sizes=()
@@ -369,12 +362,7 @@ collect_dict_expansion_params() {
         echo "Step-up level: $step_up"
         log "User selected ${NEW_SIZE} GiB (step-up: ${step_up})"
         # Check projected disk usage percentage
-        projected_usage=$(awk -v dict="$DICT_SIZE" -v new="$NEW_SIZE" -v avail="$avail_metadata_gib" \
-            'BEGIN {
-        total_needed = dict + new
-        usage_percent = (total_needed / avail) * 100
-        printf "%.2f", usage_percent
-    }')
+        calculate_projected_metadata_usage
 
         if (($(awk "BEGIN {print ($projected_usage >= 90)}"))); then
             echo -e "${YELLOW}⚠ WARNING: Projected disk usage will reach ${projected_usage}% of available metadata space.${NC}"
@@ -388,6 +376,31 @@ collect_dict_expansion_params() {
     done
 
     export NEW_SIZE step_up
+}
+calculate_projected_metadata_usage() {
+    echo -e "\n${GREEN}Calculating Projected Metadata Disk Usage After Expansion${NC}"
+
+    if [[ -z "$DICT_SIZE_RAW" || -z "$NEW_SIZE" || -z "$avail_metadata_gib" ]]; then
+        echo -e "${RED}Error: Missing required variables to calculate projected usage.${NC}"
+        return 1
+    fi
+
+    projected_usage=$(awk -v dict="$DICT_SIZE_RAW" -v new="$NEW_SIZE" -v avail="$avail_metadata_gib" \
+        'BEGIN {
+            total_needed = dict + new
+            usage_percent = (total_needed / avail) * 100
+            printf "%.2f", usage_percent
+        }')
+
+    echo "Projected Metadata Disk Usage: ${projected_usage}%"
+    log "Projected metadata usage after expansion: ${projected_usage}%"
+
+    if (($(awk "BEGIN { print (${projected_usage} >= 90) ? 1 : 0 }"))); then
+        echo -e "${YELLOW}⚠ Warning: Metadata disk usage will reach ${projected_usage}%. Consider freeing up space.${NC}"
+        log "WARNING: Projected metadata usage over 90%"
+    fi
+
+    export projected_usage
 }
 
 calculate_projected_usage() {
@@ -478,25 +491,27 @@ compute_avail_metadata_gib() {
     log "Parsed available metadata space: ${avail_metadata_gib} GiB"
 }
 
-
 validate_metadata_space() {
-compute_avail_metadata_gib
+    echo -e "\n${GREEN}Validating Metadata Partition Space for Expansion${NC}"
+    show_progress_bar
+    compute_avail_metadata_gib
+
     required_space=$(awk "BEGIN { print $DICT_SIZE_RAW + $NEW_SIZE }")
-    space_ok=$(awk -v avail="$avail_gib" -v required="$required_space" \
+    space_ok=$(awk -v avail="$avail_metadata_gib" -v required="$required_space" \
         'BEGIN { print (avail >= required) ? 1 : 0 }')
 
-    echo "Available space: ${avail_gib} GiB"
+    echo "Available space: ${avail_metadata_gib} GiB"
     echo "Required space : ${required_space} GiB (dict2 + new dict-${NEW_SIZE}GiB)"
 
     if [[ "$space_ok" -ne 1 ]]; then
         echo -e "${RED}Error: Not enough space on the metadata partition to perform expansion.${NC}"
         echo "Please free up space or expand storage before proceeding."
-        log "ERROR: Not enough metadata space. Required: ${required_space} GiB, Available: ${avail_gib} GiB"
+        log "ERROR: Not enough metadata space. Required: ${required_space} GiB, Available: ${avail_metadata_gib} GiB"
         exit 1
     fi
 
     echo -e "${GREEN}Sufficient space available to proceed with expansion.${NC}"
-    log "Metadata space validated: Required ${required_space} GiB, Available ${avail_gib} GiB"
+    log "Metadata space validated: Required ${required_space} GiB, Available ${avail_metadata_gib} GiB"
 }
 
 evaluate_max_supported_size() {
@@ -534,7 +549,6 @@ evaluate_max_supported_size() {
     for size in "${all_sizes[@]}"; do
         space_ok=$(awk -v avail="$avail_metadata_gib" -v current="$DICT_SIZE_RAW" -v new="$size" \
             'BEGIN { print (avail >= (current + new)) ? 1 : 0 }')
-        echo "Checked size $size GiB → space OK? $space_ok"
         if [[ "$space_ok" -eq 1 ]]; then
             disk_limit=$size
         fi
@@ -568,7 +582,7 @@ evaluate_max_supported_size() {
     echo "Maximum dictionary size supported based on disk space : ${disk_limit:-N/A} GiB"
 
     if [[ "$effective_limit" != "N/A" ]]; then
-        echo -e "${GREEN}Effective maximum dictionary size: ${effective_limit} GiB${NC}"
+        echo -e "${GREEN}Effective maximum dictionary size: $(format_gib "$effective_limit") GiB${NC}"
     else
         echo -e "${RED}No dictionary expansion possible due to system constraints.${NC}"
         exit 1
@@ -598,13 +612,23 @@ confirm_action() {
 }
 
 confirm_expansion_plan() {
+    # Apply color to projected usage
+    if (($(awk "BEGIN { print ($projected_usage >= 90) ? 1 : 0 }"))); then
+        usage_color="$RED"
+    elif (($(awk "BEGIN { print ($projected_usage >= 70) ? 1 : 0 }"))); then
+        usage_color="$YELLOW"
+    else
+        usage_color="$GREEN"
+    fi
+
     echo
     echo -e "${GREEN}Summary of Proposed Expansion:${NC}"
-    echo "Current Dictionary Size : ${DICT_SIZE} GiB"
+    echo "Current Dictionary Size : $(format_gib "$DICT_SIZE_RAW") GiB"
     echo "Selected New Size        : ${NEW_SIZE} GiB"
     echo "Step-up Level            : $step_up"
     echo "Page Size               : ${PAGE_SIZE}"
     echo "Projected Usage          : ${NEW_PERCENT_USED} %"
+    echo "Projected Metadata Disk Usage : ${usage_color}${projected_usage} %${NC}"
 
     echo
     while true; do
