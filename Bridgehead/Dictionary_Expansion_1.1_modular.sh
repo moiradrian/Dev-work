@@ -620,6 +620,12 @@ confirm_expansion_plan() {
     else
         usage_color="$GREEN"
     fi
+    # Optional disk cleanup recommendation
+    if [[ "$usage_color" == "$RED" || "$usage_color" == "$YELLOW" ]]; then
+        disk_cleanup_hint="→ Consider removing 'dict2.old' to free space once QoreStor is operational."
+    else
+        disk_cleanup_hint=""
+    fi
 
     echo
     echo -e "${GREEN}Summary of Proposed Expansion:${NC}"
@@ -627,34 +633,35 @@ confirm_expansion_plan() {
     echo "Selected New Size        : ${NEW_SIZE} GiB"
     echo "Step-up Level            : $step_up"
     echo "Page Size               : ${PAGE_SIZE}"
-    echo "Projected Usage          : ${NEW_PERCENT_USED} %"
-    echo "Projected Metadata Disk Usage : ${usage_color}${projected_usage} %${NC}"
+    echo "Projected New Dictionary Usage          : ${NEW_PERCENT_USED} %"
+    echo -e "Projected Metadata Disk Usage : ${usage_color}${projected_usage} %${NC}"
+    [[ -n "$disk_cleanup_hint" ]] && echo -e "${YELLOW}${disk_cleanup_hint}${NC}"
 
     echo
     while true; do
-        read -r -p "Proceed with expansion? (yes / reselect / cancel) [cancel]: " decision
-        case "$decision" in
-        [yY][eE][sS] | [yY])
+        read -r -p "Proceed with expansion? (yes / reselect / cancel) [c]: " decision
+        case "${decision,,}" in
+        y | yes)
             log "User confirmed to proceed with expansion."
-            return 0 # proceed
+            return 0
             ;;
-        [rR][eE][sS][eE][lL][eE][cC][tT])
+        r | reselect)
             log "User chose to reselect dictionary size."
             echo -e "${GREEN}Reselecting dictionary size...${NC}"
             collect_dict_expansion_params
             calculate_projected_usage
             validate_memory_for_size
             validate_metadata_space
-            confirm_expansion_plan # recursive call
-            return $?              # bubble up user's final answer
+            confirm_expansion_plan
+            return $? # bubble result
             ;;
-        "" | [cC][aA][nN][cC][eE][lL])
+        "" | c | cancel)
             log "User cancelled the operation."
             echo "Operation cancelled by user."
             exit 1
             ;;
         *)
-            echo "Invalid option. Please type 'yes', 'reselect', or 'cancel'."
+            echo "Invalid option. Please type 'yes' (y), 'reselect' (r), or 'cancel' (c)."
             ;;
         esac
     done
