@@ -249,7 +249,9 @@ get_dict_info() {
 
     BYTES=$(stat -c%s "$DICT_FILE")
     FLOOR_GIB=$((BYTES / 1024 / 1024 / 1024))
-    DICT_SIZE=$(awk "BEGIN { printf \"%.2f\", $BYTES/1024/1024/1024 }")
+    DICT_SIZE_RAW=$(awk "BEGIN { printf \"%.2f\", $BYTES/1024/1024/1024 }")
+    DICT_SIZE="${DICT_SIZE_RAW} GiB"
+
     echo "Dictionary Size: $DICT_SIZE GiB"
 
     for k in $(printf '%s\n' "${!max_keys_map[@]}" | sort -n); do
@@ -329,7 +331,7 @@ collect_dict_expansion_params() {
     valid_sizes=()
     for size in "${all_sizes[@]}"; do
         mem_ok=$((total_mem_gib >= min_mem_required[$size]))
-        space_ok=$(awk -v avail="$avail_metadata_gib" -v required="$DICT_SIZE" -v new="$size" \
+        space_ok=$(awk -v avail="$avail_metadata_gib" -v required="$DICT_SIZE_RAW" -v new="$size" \
             'BEGIN { print (avail >= (required + new)) ? 1 : 0 }')
 
         if ((size > CUR_SIZE_INT && mem_ok && space_ok)); then
@@ -475,7 +477,7 @@ validate_metadata_space() {
         exit 1
     fi
 
-    required_space=$(awk "BEGIN { print $DICT_SIZE + $NEW_SIZE }")
+    required_space=$(awk "BEGIN { print $DICT_SIZE_RAW + $NEW_SIZE }")
     space_ok=$(awk -v avail="$avail_gib" -v required="$required_space" \
         'BEGIN { print (avail >= required) ? 1 : 0 }')
 
@@ -526,7 +528,7 @@ evaluate_max_supported_size() {
     # 2. Disk-based filtering
     disk_limit=""
     for size in "${all_sizes[@]}"; do
-        space_ok=$(awk -v avail="$avail_metadata_gib" -v current="$DICT_SIZE" -v new="$size" \
+        space_ok=$(awk -v avail="$avail_metadata_gib" -v current="$DICT_SIZE_RAW" -v new="$size" \
             'BEGIN { print (avail >= (current + new)) ? 1 : 0 }')
         echo "Checked size $size GiB → space OK? $space_ok"
         if [[ "$space_ok" -eq 1 ]]; then
