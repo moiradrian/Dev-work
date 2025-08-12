@@ -595,10 +595,19 @@ evaluate_max_supported_size() {
     fi
 
     case "$reason" in
-    memory) echo -e "→ ${YELLOW}Limiting factor: memory${NC}" ;;
-    disk) echo -e "→ ${YELLOW}Limiting factor: disk space${NC}" ;;
-    both) echo -e "→ ${RED}Limiting factor: both memory and disk${NC}" ;;
-    *) echo -e "→ No limiting factor detected" ;;
+    memory) echo -e "→ ${YELLOW}Limiting factor: memory${NC}" 
+    log warn "Limiting factor: memory"
+    ;;
+    disk) echo -e "→ ${YELLOW}Limiting factor: disk space${NC}" 
+    log warn "Limiting factor: disk space"
+    ;;
+    both) echo -e "→ ${RED}Limiting factor: both memory and disk${NC}" 
+    log error "Limiting factor: both memory and disk"
+    ;;
+    *) 
+    echo -e "→ No limiting factor detected" 
+    log info "No limiting factor detected"
+    ;;
     esac
 
     log info "Max supported dict size: $effective_limit GiB (limited by $reason)"
