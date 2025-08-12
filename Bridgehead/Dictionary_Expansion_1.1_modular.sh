@@ -597,11 +597,11 @@ evaluate_max_supported_size() {
     case "$reason" in
     memory)
         echo -e "→ ${YELLOW}Limiting factor: memory${NC}"
-        log warn "Limiting factor: memory (Max mem size: ${mem_limit} GiB, Max disk size: ${disk_limit:-N/A} GiB)"
+        log warn "Limiting factor: memory (Max Memory allows size of: ${mem_limit} GiB, Max disk space allows size of: ${disk_limit:-N/A} GiB)"
         ;;
     disk)
         echo -e "→ ${YELLOW}Limiting factor: disk space${NC}"
-        log warn "Limiting factor: disk space (Max mem size: ${mem_limit:-N/A} GiB, Max disk size: ${disk_limit} GiB)"
+        log warn "Limiting factor: disk space (Max Memory allows size of: ${mem_limit:-N/A} GiB, Max disk space allows size of: ${disk_limit} GiB)"
         ;;
     both)
         echo -e "→ ${RED}Limiting factor: both memory and disk${NC}"
