@@ -527,7 +527,7 @@ collect_dict_expansion_params() {
         step_up=0
         for size in "${all_sizes[@]}"; do
             if ((size > CUR_SIZE_INT && size <= NEW_SIZE)); then
-                ((step_up++))
+                step_up=$((step_up + 1))
             fi
         done
         # After determining NEW_SIZE & step_up
