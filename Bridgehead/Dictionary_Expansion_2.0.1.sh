@@ -32,19 +32,30 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
-
 SHOW_ALL_SIZES=false
 DRY_RUN=false
 
 FAST_START=false
 
 for arg in "$@"; do
-    case "$arg" in
-    --show-all-sizes) SHOW_ALL_SIZES=true ;;
-    --dry-run) DRY_RUN=true ;;
-    --fast-start) FAST_START=true ;;
-    esac
+  case "$arg" in
+    --help)            show_help ;;  # exits 0
+    --dry-run)         DRY_RUN=true ;;
+    --show-all-sizes)  SHOW_ALL_SIZES=true ;;
+    --fast-start)
+        FAST_START=true
+        # set your faster tunables here if not already done elsewhere
+        START_TIMEOUT=60
+        START_POLL_INTERVAL=0.15
+        ;;
+    *)
+        echo -e "${YELLOW}Unknown option: ${arg}${NC}"
+        echo "Try: $0 --help"
+        exit 2
+        ;;
+  esac
 done
+
 
 if $FAST_START; then
     START_TIMEOUT=60         # tighter timeout
@@ -70,6 +81,59 @@ declare -A max_keys_map=(
 )
 
 # ---------- Functions / Helpers ----------
+
+get_term_width() {
+    # Prefer $COLUMNS, then tput, fallback to 80
+    local w="${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}"
+    [[ "$w" =~ ^[0-9]+$ ]] || w=80
+    echo "$w"
+}
+
+# Wraps $1 to (terminal_width - indent), indenting continuation lines by $2 spaces
+wrap_text() {
+    local text="$1" indent="$2"
+    local width; width=$(get_term_width)
+    local bodywidth=$(( width - indent ))
+    # Ensure sane minimum
+    (( bodywidth < 30 )) && bodywidth=30
+    echo "$text" | fold -s -w "$bodywidth" | sed "2,999s/^/$(printf '%*s' "$indent")/"
+}
+
+# Prints an option row like: "  --flag           Description that wraps…"
+print_opt() {
+    local opt="$1" desc="$2"
+    local indent_after_opt=22  # aligns wrapped description
+    printf "  %-20s " "$opt"
+    wrap_text "$desc" "$indent_after_opt"
+}
+
+show_help() {
+    echo -e "${GREEN}Usage:${NC} $0 [options]\n"
+
+    echo -e "${GREEN}Options:${NC}"
+    print_opt "--help"            "Show this help message and exit."
+    print_opt "--dry-run"         "Run in simulation mode. No changes will be made. Prompts still appear; actions are only logged."
+    print_opt "--show-all-sizes"  "Display all possible dictionary sizes regardless of current memory/disk limits."
+    print_opt "--fast-start"      "Reduce service restart timeout and increase polling frequency for quicker testing."
+
+    echo -e "\n${GREEN}Behaviour:${NC}"
+    wrap_text "• ${YELLOW}--dry-run${NC}: Prints planned actions and skips changes, including service stop/start and file renames." 2
+    wrap_text "• ${YELLOW}--fast-start${NC}: Uses smaller ${GREEN}START_TIMEOUT${NC} and faster ${GREEN}START_POLL_INTERVAL${NC}." 2
+    wrap_text "• ${YELLOW}--show-all-sizes${NC}: Lists sizes without filtering by memory/disk; actual selection still validated." 2
+
+    echo -e "\n${GREEN}Interactive confirmations:${NC}"
+    wrap_text "After stopping services: type ${GREEN}expand${NC}/${GREEN}e${NC} to extend, ${GREEN}skip${NC}/${GREEN}s${NC} (default) to skip, or ${RED}cancel${NC}/${RED}c${NC} to exit with services stopped." 2
+    wrap_text "Before restarting services: type ${GREEN}yes${NC}/${GREEN}y${NC} (default) to start, or ${RED}cancel${NC}/${RED}c${NC} to exit with services stopped." 2
+
+    echo -e "\n${GREEN}Examples:${NC}"
+    echo "  $0 --dry-run"
+    echo "  $0 --show-all-sizes"
+    echo "  $0 --dry-run --fast-start"
+    echo
+    exit 0
+}
+
+
 
 get_system_state() {
     system --show | awk -F':' '
