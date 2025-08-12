@@ -2,14 +2,19 @@
 
 # ---------- Constraints ----------
 readonly PAGE_SIZE=11
-readonly LOG_FILE="./dictionary_expansion.log"
 
 # ------ Set up logging ------
+RUN_TIMESTAMP=$(date "+%Y%m%d_%H%M%S")
+readonly LOG_FILE="./dictionary_expansion_${RUN_TIMESTAMP}.log"
 
 log() {
+    local level="${1^^}" # First arg is level: INFO/WARN/ERROR
+    shift
     local timestamp
     timestamp=$(date "+%Y-%m-%d %H:%M:%S")
-    echo "[$timestamp] $*" >>"$LOG_FILE"
+    local caller
+    caller=$(caller 0 | awk '{print $2}') # name of calling function
+    echo "[$timestamp] [$level] [$caller] $*" >>"$LOG_FILE"
 }
 
 # ---------- Config & Globals ----------
@@ -91,6 +96,7 @@ show_system_info() {
         gsub(/^ +| +$/, "", $2)
         printf "%s: %s\n", $1, $2
     }'
+    log info "System Info collected."
 }
 
 get_total_memory() {
@@ -106,7 +112,7 @@ get_total_memory() {
     echo "Total Installed Memory: ${total_mem_gib} GiB"
 
     export total_mem_gib
-    log "Total Installed Memory: ${total_mem_gib} GiB"
+    log info "Total Installed Memory: ${total_mem_gib} GiB"
 }
 
 show_max_supported_dict_size() {
@@ -171,18 +177,18 @@ show_max_supported_dict_size() {
             if (($(awk 'BEGIN {exit ARGV[1] > 85 ? 0 : 1}' "$next_percent_used"))); then
                 echo -e "${RED}⚠️  Warning: Projected usage after expansion would still be over 85%.${NC}"
                 echo -e "  This expansion may not provide significant headroom."
-                log "WARNING: Projected usage after expanding to ${next_size} GiB would be ${next_percent_used}%"
+                log warn "WARNING: Projected usage after expanding to ${next_size} GiB would be ${next_percent_used}%"
             fi
 
-            log "Next size ${next_size} GiB requires ${next_required_mem} GiB RAM; projected usage: ${next_percent_used}%"
+            log info "Next size ${next_size} GiB requires ${next_required_mem} GiB RAM; projected usage: ${next_percent_used}%"
         else
             echo -e "${YELLOW}You are already at the maximum configurable dictionary size available.${NC}"
-            log "User is at the highest dictionary size available. No further upgrades possible."
+            log info "User is at the highest dictionary size available. No further upgrades possible."
         fi
 
     else
         echo -e "${GREEN}Maximum dictionary size supported based on available memory: ${max_supported_size} GiB${NC}"
-        log "Max supported dictionary size based on ${total_mem_gib} GiB RAM: ${max_supported_size} GiB"
+        log info "Max supported dictionary size based on ${total_mem_gib} GiB RAM: ${max_supported_size} GiB"
     fi
 }
 
@@ -247,7 +253,7 @@ get_metadata_usage() {
     printf "%-8s %-8s %-8s %-6s\n" "Size" "Used" "Avail" "Use%"
     printf "%-8s %-8s %-8s %-6s\n" "$SIZE" "$USED" "$AVAIL" "$USEP"
 
-    log "Metadata partition available space: $AVAIL"
+    log info "Metadata partition available space: $AVAIL"
 }
 
 get_dict_info() {
@@ -360,17 +366,17 @@ collect_dict_expansion_params() {
 
         echo -e "${GREEN}Dictionary size will increase from ${CUR_SIZE_INT} to ${NEW_SIZE} GiB${NC}"
         echo "Step-up level: $step_up"
-        log "User selected ${NEW_SIZE} GiB (step-up: ${step_up})"
+        log info "User selected ${NEW_SIZE} GiB (step-up: ${step_up})"
         # Check projected disk usage percentage
         calculate_projected_metadata_usage
 
         if (($(awk "BEGIN {print ($projected_usage >= 90)}"))); then
             echo -e "${YELLOW}⚠ WARNING: Projected disk usage will reach ${projected_usage}% of available metadata space.${NC}"
             echo "Proceed with caution — consider freeing up space before continuing."
-            log "WARNING: Projected metadata usage will be ${projected_usage}%"
+            log warn "WARNING: Projected metadata usage will be ${projected_usage}%"
         else
             echo "Projected metadata usage after expansion: ${projected_usage}%"
-            log "Projected usage OK: ${projected_usage}%"
+            log info "Projected usage OK: ${projected_usage}%"
         fi
         break
     done
@@ -393,11 +399,11 @@ calculate_projected_metadata_usage() {
         }')
 
     echo "Projected Metadata Disk Usage: ${projected_usage}%"
-    log "Projected metadata usage after expansion: ${projected_usage}%"
+    log info "Projected metadata usage after expansion: ${projected_usage}%"
 
     if (($(awk "BEGIN { print (${projected_usage} >= 90) ? 1 : 0 }"))); then
         echo -e "${YELLOW}⚠ Warning: Metadata disk usage will reach ${projected_usage}%. Consider freeing up space.${NC}"
-        log "WARNING: Projected metadata usage over 90%"
+        log warn "WARNING: Projected metadata usage over 90%"
     fi
 
     export projected_usage
@@ -430,7 +436,7 @@ calculate_projected_usage() {
 
     echo "New MAX KEYS: $NEW_MAX_KEYS_FMT"
     echo "Projected Percent Used: $NEW_PERCENT_USED %  (based on ${NEW_SIZE} GiB)"
-    log "Projected percent used for ${NEW_SIZE} GiB: ${NEW_PERCENT_USED}%"
+    log info "Projected percent used for ${NEW_SIZE} GiB: ${NEW_PERCENT_USED}%"
 }
 
 validate_memory_for_size() {
@@ -453,7 +459,7 @@ validate_memory_for_size() {
     if ((total_mem_gib < required_mem)); then
         echo -e "${RED}Insufficient memory for selected dictionary size.${NC}"
         echo "Required: ${required_mem} GiB, Available: ${total_mem_gib} GiB"
-        log "Memory validation failed for ${NEW_SIZE} GiB — Required: ${required_mem} GiB, Available: ${total_mem_gib} GiB"
+        log error "Memory validation failed for ${NEW_SIZE} GiB — Required: ${required_mem} GiB, Available: ${total_mem_gib} GiB"
         echo "Returning to size selection..."
 
         # Loop back just like reselect
@@ -463,7 +469,7 @@ validate_memory_for_size() {
         return 0
     else
         echo -e "${GREEN}Memory Check Passed:${NC} Required ${required_mem} GiB, Available ${total_mem_gib} GiB"
-        log "Memory validated for ${NEW_SIZE} GiB (Required: ${required_mem} GiB, Available: ${total_mem_gib} GiB)"
+        log info "Memory validated for ${NEW_SIZE} GiB (Required: ${required_mem} GiB, Available: ${total_mem_gib} GiB)"
     fi
 }
 
@@ -488,7 +494,7 @@ compute_avail_metadata_gib() {
     fi
 
     export avail_metadata_gib
-    log "Parsed available metadata space: ${avail_metadata_gib} GiB"
+    log info "Parsed available metadata space: ${avail_metadata_gib} GiB"
 }
 
 validate_metadata_space() {
@@ -506,12 +512,12 @@ validate_metadata_space() {
     if [[ "$space_ok" -ne 1 ]]; then
         echo -e "${RED}Error: Not enough space on the metadata partition to perform expansion.${NC}"
         echo "Please free up space or expand storage before proceeding."
-        log "ERROR: Not enough metadata space. Required: ${required_space} GiB, Available: ${avail_metadata_gib} GiB"
+        log error "ERROR: Not enough metadata space. Required: ${required_space} GiB, Available: ${avail_metadata_gib} GiB"
         exit 1
     fi
 
     echo -e "${GREEN}Sufficient space available to proceed with expansion.${NC}"
-    log "Metadata space validated: Required ${required_space} GiB, Available ${avail_metadata_gib} GiB"
+    log info "Metadata space validated: Required ${required_space} GiB, Available ${avail_metadata_gib} GiB"
 }
 
 evaluate_max_supported_size() {
@@ -595,7 +601,7 @@ evaluate_max_supported_size() {
     *) echo -e "→ No limiting factor detected" ;;
     esac
 
-    log "Max supported dict size: $effective_limit GiB (limited by $reason)"
+    log info "Max supported dict size: $effective_limit GiB (limited by $reason)"
 
     export effective_limit
 }
@@ -642,11 +648,11 @@ confirm_expansion_plan() {
         read -r -p "Proceed with expansion? (yes / reselect / cancel) [c]: " decision
         case "${decision,,}" in
         y | yes)
-            log "User confirmed to proceed with expansion."
+            log info "User confirmed to proceed with expansion."
             return 0
             ;;
         r | reselect)
-            log "User chose to reselect dictionary size."
+            log info "User chose to reselect dictionary size."
             echo -e "${GREEN}Reselecting dictionary size...${NC}"
             collect_dict_expansion_params
             calculate_projected_usage
@@ -656,7 +662,7 @@ confirm_expansion_plan() {
             return $? # bubble result
             ;;
         "" | c | cancel)
-            log "User cancelled the operation."
+            log info "User cancelled the operation."
             echo "Operation cancelled by user."
             exit 1
             ;;
@@ -672,7 +678,7 @@ stop_services() {
     # sudo systemctl stop ocards
     echo "[TEST MODE] faked stopping of service"
     echo "'ocards' service stopped."
-    log "QoreStor services stopped. (actual or simulated)"
+    log info "QoreStor services stopped. (actual or simulated)"
 }
 
 # ---------- Main Entry Point ----------
