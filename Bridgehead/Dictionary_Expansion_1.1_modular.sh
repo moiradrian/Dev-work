@@ -629,6 +629,7 @@ confirm_expansion_plan() {
     # Optional disk cleanup recommendation
     if [[ "$usage_color" == "$RED" || "$usage_color" == "$YELLOW" ]]; then
         disk_cleanup_hint="→ Consider removing 'dict2.old' to free space once QoreStor is operational."
+        log warn "Disk cleanup hint: $disk_cleanup_hint"
     else
         disk_cleanup_hint=""
     fi
