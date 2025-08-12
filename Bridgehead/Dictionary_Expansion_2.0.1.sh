@@ -1,6 +1,6 @@
 #!/bin/bash
-
-set -euo pipefail
+set -Euo pipefail                            # note the capital E (errtrace)
+shopt -s inherit_errexit 2>/dev/null || true # best effort on newer bash
 IFS=$'\n\t'
 trap 'echo -e "${RED}Error on line $LINENO in function ${FUNCNAME[0]:-main}: ${BASH_COMMAND}${NC}"; log error "Line $LINENO: $BASH_COMMAND"; exit 1' ERR
 
@@ -21,13 +21,14 @@ RUN_TIMESTAMP=$(date "+%Y%m%d_%H%M%S")
 readonly LOG_FILE="./dictionary_expansion_${RUN_TIMESTAMP}.log"
 
 log() {
-    local level="${1^^}" # First arg is level: INFO/WARN/ERROR
-    shift
+    local level="${1^^}"
+    shift # First arg is level: INFO/WARN/ERROR
     local timestamp
     timestamp=$(date "+%Y-%m-%d %H:%M:%S")
-    local caller
-    caller=$(caller 0 | awk '{print $2}') # name of calling function
-    echo "[$timestamp] [$level] [$caller] $*" >>"$LOG_FILE"
+    local caller_name
+    caller_name=$({ caller 0 2>/dev/null || true; } | awk '{print $2}')
+    caller_name=${caller_name:-main}
+    echo "[$timestamp] [$level] [$caller_name:-main] $*" >>"$LOG_FILE"
 }
 
 # ---------- Config & Globals ----------
@@ -511,7 +512,12 @@ collect_dict_expansion_params() {
 
     while true; do
         read -r -p "Enter the new desired dictionary size (GiB): " NEW_SIZE
-
+        # immediately after reading NEW_SIZE
+        NEW_SIZE=$(echo "$NEW_SIZE" | xargs) # trim
+        [[ "$NEW_SIZE" =~ ^[0-9]+$ ]] || {
+            echo -e "${RED}Please enter a numeric size from the list.${NC}"
+            continue
+        }
         if [[ ! " ${valid_sizes[*]} " =~ " ${NEW_SIZE} " ]]; then
             echo -e "${RED}Invalid selection. Choose from the listed sizes only.${NC}"
             continue
@@ -532,6 +538,8 @@ collect_dict_expansion_params() {
 
         echo -e "${GREEN}Dictionary size will increase from ${CUR_SIZE_INT} to ${NEW_SIZE} GiB${NC}"
         echo "Step-up level: $step_up"
+        # after: echo "Step-up level: $step_up"
+        log info "POST-SELECT: NEW_SIZE=${NEW_SIZE}, step_up=${step_up} (about to compute projected usage)"
         log info "User selected ${NEW_SIZE} GiB (step-up: ${step_up})"
         # Check projected disk usage percentage
         calculate_projected_metadata_usage
@@ -567,7 +575,7 @@ calculate_projected_metadata_usage() {
     echo "Projected Metadata Disk Usage: ${projected_usage}%"
     log info "Projected metadata usage after expansion: ${projected_usage}%"
 
-    if (($(awk "BEGIN { print (${projected_usage} >= 90) ? 1 : 0 }"))); then
+    if awk -v x="$projected_usage" 'BEGIN{exit (x>=90)?0:1}'; then
         echo -e "${YELLOW}⚠ Warning: Metadata disk usage will reach ${projected_usage}%. Consider freeing up space.${NC}"
         log warn "WARNING: Projected metadata usage over 90%"
     fi
