@@ -24,13 +24,13 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 SHOW_ALL_SIZES=false
+DRY_RUN=false
 
 # Parse CLI flags
 for arg in "$@"; do
     case "$arg" in
-    --show-all-sizes)
-        SHOW_ALL_SIZES=true
-        ;;
+    --show-all-sizes) SHOW_ALL_SIZES=true ;;
+    --dry-run) DRY_RUN=true ;;
     esac
 done
 
@@ -694,9 +694,110 @@ stop_services() {
     log info "QoreStor services stopped. (actual or simulated)"
 }
 
+extend_dictionary() {
+    echo -e "\n${GREEN}Extending Dictionary${NC}"
+
+    # Preconditions
+    if [[ -z "$DICT_FILE" || -z "$BASE_PATH" || -z "$NEW_SIZE" || -z "$step_up" ]]; then
+        echo -e "${RED}Error: Missing required variables (DICT_FILE/BASE_PATH/NEW_SIZE/step_up).${NC}"
+        exit 1
+    fi
+
+    # Build destination and backup paths
+    local ts dest_path backup backup_rot cmd
+    ts=$(date "+%Y%m%d_%H%M%S")
+    dest_path="${BASE_PATH}/dict-${ts}"
+    backup="${BASE_PATH}/dict2.old"
+    [[ -e "$backup" ]] && backup_rot="${backup}.${ts}"
+
+    # Compose command array
+    cmd=(uhd_extend -p "$DICT_FILE" -s "$step_up" -k "$PAGE_SIZE" -d "$dest_path")
+
+    if $DRY_RUN; then
+        echo -e "\n${YELLOW}Dry Run Information:${NC}"
+        echo "• Dictionary file present : $([[ -e "$DICT_FILE" ]] && echo yes || echo no)"
+        echo "• Current file            : $DICT_FILE"
+        if [[ -n "$backup_rot" ]]; then
+            echo "• Backup target (rotate)  : $backup -> $backup_rot"
+        else
+            echo "• Backup target           : $backup"
+        fi
+        echo "• New file to be created  : $dest_path"
+        echo "• Activation rename       : ${dest_path} -> ${DICT_FILE}"
+        echo "• Command to run          : ${cmd[*]}"
+
+        log info "Dry Run Information:"
+        log info "Dictionary file present: $([[ -e "$DICT_FILE" ]] && echo yes || echo no)"
+        log info "Current file: $DICT_FILE"
+        if [[ -n "$backup_rot" ]]; then
+            log info "Backup target (rotate): $backup -> $backup_rot"
+        else
+            log info "Backup target: $backup"
+        fi
+        log info "New file to be created: $dest_path"
+        log info "Activation rename: ${dest_path} -> ${DICT_FILE}"
+        log info "Command to run: ${cmd[*]}"
+
+        echo -e "${GREEN}Dry run complete. No changes made.${NC}"
+        return 0
+    fi
+
+    # ---- Real execution path ----
+    echo "Running: ${cmd[*]}"
+    log info "Invoking uhd_extend: ${cmd[*]}"
+
+    if ! "${cmd[@]}"; then
+        echo -e "${RED}uhd_extend failed. Aborting.${NC}"
+        log error "uhd_extend failed for source=$DICT_FILE dest=$dest_path step_up=$step_up page_shift=$PAGE_SIZE"
+        exit 1
+    fi
+
+    if [[ ! -s "$dest_path" ]]; then
+        echo -e "${RED}Error: Destination dictionary not created or empty: ${dest_path}${NC}"
+        log error "Destination dictionary missing/empty at ${dest_path}"
+        exit 1
+    fi
+    log info "uhd_extend completed. New dictionary at ${dest_path}"
+
+    # Rotate existing backup if present
+    if [[ -e "$backup" ]]; then
+        echo "Existing ${backup} found; rotating to ${backup_rot}"
+        log info "Rotating existing backup: ${backup} -> ${backup_rot}"
+        mv -f "$backup" "$backup_rot" || {
+            echo -e "${RED}Failed to rotate old backup${NC}"
+            log error "Failed to rotate ${backup}"
+            exit 1
+        }
+    fi
+
+    echo "Backing up current dict2 -> dict2.old"
+    log info "Renaming ${DICT_FILE} -> ${backup}"
+    mv -f "$DICT_FILE" "$backup" || {
+        echo -e "${RED}Failed to backup dict2${NC}"
+        log error "mv ${DICT_FILE} ${backup} failed"
+        exit 1
+    }
+
+    echo "Activating new dictionary -> dict2"
+    log info "Renaming ${dest_path} -> ${DICT_FILE}"
+    if ! mv -f "$dest_path" "$DICT_FILE"; then
+        echo -e "${RED}Activation failed; attempting rollback...${NC}"
+        log error "Activation mv failed; rolling back"
+        mv -f "$backup" "$DICT_FILE" 2>/dev/null
+        exit 1
+    fi
+
+    echo -e "${GREEN}Dictionary expansion swap complete.${NC}"
+    log info "Dictionary swap complete: active=${DICT_FILE}, backup=${backup}"
+}
+
 # ---------- Main Entry Point ----------
 
 main() {
+    # Show dry-run notice early
+    $DRY_RUN && echo -e "${YELLOW}Running in DRY-RUN mode. No changes will be made.${NC}"
+    $DRY_RUN && log "DRY-RUN mode enabled"
+
     show_system_info
     get_total_memory
     get_main_data_path
@@ -718,6 +819,7 @@ main() {
 
     if confirm_action; then
         stop_services
+        extend_dictionary
     else
         exit 1
     fi
