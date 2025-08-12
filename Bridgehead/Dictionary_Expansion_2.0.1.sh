@@ -2,8 +2,7 @@
 
 set -euo pipefail
 IFS=$'\n\t'
-
-trap 'echo -e "${RED}A fatal error occurred. See log for details.${NC}"; exit 1' ERR
+trap 'echo -e "${RED}Error on line $LINENO in function ${FUNCNAME[0]:-main}: ${BASH_COMMAND}${NC}"; log error "Line $LINENO: $BASH_COMMAND"; exit 1' ERR
 
 # ---------- Constraints ----------
 readonly PAGE_SIZE=11
@@ -517,6 +516,7 @@ collect_dict_expansion_params() {
             echo -e "${RED}Invalid selection. Choose from the listed sizes only.${NC}"
             continue
         fi
+        log info "User selected NEW_SIZE=${NEW_SIZE} GiB; step_up=${step_up}"
 
         # Step-up calculation
         step_up=0
@@ -525,6 +525,10 @@ collect_dict_expansion_params() {
                 ((step_up++))
             fi
         done
+        # After determining NEW_SIZE & step_up
+        : "${DICT_SIZE_RAW:?missing DICT_SIZE_RAW}"
+        : "${avail_metadata_gib:?missing avail_metadata_gib}"
+        : "${NEW_SIZE:?missing NEW_SIZE}"
 
         echo -e "${GREEN}Dictionary size will increase from ${CUR_SIZE_INT} to ${NEW_SIZE} GiB${NC}"
         echo "Step-up level: $step_up"
@@ -532,7 +536,7 @@ collect_dict_expansion_params() {
         # Check projected disk usage percentage
         calculate_projected_metadata_usage
 
-        if (($(awk "BEGIN {print ($projected_usage >= 90)}"))); then
+        if awk -v x="$projected_usage" 'BEGIN {exit (x>= 90)?0:1}'; then
             echo -e "${YELLOW}⚠ WARNING: Projected disk usage will reach ${projected_usage}% of available metadata space.${NC}"
             echo "Proceed with caution — consider freeing up space before continuing."
             log warn "WARNING: Projected metadata usage will be ${projected_usage}%"
@@ -664,24 +668,20 @@ validate_metadata_space() {
     show_progress_bar
     compute_avail_metadata_gib
 
-    required_space=$(awk "BEGIN { print $DICT_SIZE_RAW + $NEW_SIZE }")
-    space_ok=$(awk -v avail="$avail_metadata_gib" -v required="$required_space" \
-        'BEGIN { print (avail >= required) ? 1 : 0 }')
-
+    required_space=$(awk -v a="$DICT_SIZE_RAW" -v b="$NEW_SIZE" 'BEGIN{ printf "%.2f", a+b }')
     echo "Available space: ${avail_metadata_gib} GiB"
     echo "Required space : ${required_space} GiB (dict2 + new dict-${NEW_SIZE}GiB)"
 
-    if [[ "$space_ok" -ne 1 ]]; then
+    if awk -v avail="$avail_metadata_gib" -v required="$required_space" \
+        'BEGIN{ exit (avail >= required) ? 0 : 1 }'; then
+        : # ok
+    else
         echo -e "${RED}Error: Not enough space on the metadata partition to perform expansion.${NC}"
         echo "Please free up space or expand storage before proceeding."
-        log error "ERROR: Not enough metadata space. Required: ${required_space} GiB, Available: ${avail_metadata_gib} GiB"
+        log error "Not enough metadata space. Required: ${required_space} GiB, Available: ${avail_metadata_gib} GiB"
         exit 1
     fi
-
-    echo -e "${GREEN}Sufficient space available to proceed with expansion.${NC}"
-    log info "Metadata space validated: Required ${required_space} GiB, Available ${avail_metadata_gib} GiB"
 }
-
 evaluate_max_supported_size() {
     echo -e "\n${GREEN}Evaluating Maximum Supported Dictionary Size Based on System Resources${NC}"
     show_progress_bar
@@ -715,9 +715,8 @@ evaluate_max_supported_size() {
     # 2. Disk-based filtering
     disk_limit=""
     for size in "${all_sizes[@]}"; do
-        space_ok=$(awk -v avail="$avail_metadata_gib" -v current="$DICT_SIZE_RAW" -v new="$size" \
-            'BEGIN { print (avail >= (current + new)) ? 1 : 0 }')
-        if [[ "$space_ok" -eq 1 ]]; then
+        if awk -v avail="$avail_metadata_gib" -v current="$DICT_SIZE_RAW" -v new="$size" \
+            'BEGIN{ exit (avail >= (current+new)) ? 0 : 1 }'; then
             disk_limit=$size
         fi
     done
@@ -792,14 +791,14 @@ confirm_action() {
 }
 
 confirm_expansion_plan() {
-    # Apply color to projected usage
-    if (($(awk "BEGIN { print ($projected_usage >= 90) ? 1 : 0 }"))); then
+    if awk -v x="$projected_usage" 'BEGIN{exit (x>=90)?0:1}'; then
         usage_color="$RED"
-    elif (($(awk "BEGIN { print ($projected_usage >= 70) ? 1 : 0 }"))); then
+    elif awk -v x="$projected_usage" 'BEGIN{exit (x>=70)?0:1}'; then
         usage_color="$YELLOW"
     else
         usage_color="$GREEN"
     fi
+
     # Optional disk cleanup recommendation
     if [[ "$usage_color" == "$RED" || "$usage_color" == "$YELLOW" ]]; then
         disk_cleanup_hint="→ Consider removing 'dict2.old' to free space once QoreStor is operational."
