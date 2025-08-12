@@ -57,17 +57,18 @@ wrap_text() {
 }
 color_wrap_text() {
     local text="$1" indent="$2"
-    local width; width=$(get_term_width)
-    local bodywidth=$(( width - indent ))
-    (( bodywidth < 30 )) && bodywidth=30
+    local width
+    width=$(get_term_width)
+    local bodywidth=$((width - indent))
+    ((bodywidth < 30)) && bodywidth=30
 
     # Strip ANSI for wrapping calculations
     local clean
     clean=$(echo -e "$text" | sed 's/\x1B\[[0-9;]*[A-Za-z]//g')
 
     # Wrap based on clean length, then reinsert color
-    echo -e "$clean" | fold -s -w "$bodywidth" | \
-        sed "2,999s/^/$(printf '%*s' "$indent")/" | \
+    echo -e "$clean" | fold -s -w "$bodywidth" |
+        sed "2,999s/^/$(printf '%*s' "$indent")/" |
         while IFS= read -r line; do
             # Replace clean words with original colorized ones
             # (this works if no wrapping happens in middle of escape sequences)
@@ -89,10 +90,10 @@ show_help() {
     echo -e "${GREEN}Usage:${NC} $0 [options]\n"
 
     echo -e "${GREEN}Options:${NC}"
-    print_opt "--help"            "Show this help message and exit."
-    print_opt "--dry-run"         "Run in simulation mode. No changes will be made. Prompts still appear; actions are only logged."
-    print_opt "--show-all-sizes"  "Display all possible dictionary sizes regardless of current memory/disk limits."
-    print_opt "--fast-start"      "Reduce service restart timeout and increase polling frequency for quicker testing."
+    print_opt "--help" "Show this help message and exit."
+    print_opt "--dry-run" "Run in simulation mode. No changes will be made. Prompts still appear; actions are only logged."
+    print_opt "--show-all-sizes" "Display all possible dictionary sizes regardless of current memory/disk limits."
+    print_opt "--fast-start" "Reduce service restart timeout and increase polling frequency for quicker testing."
 
     echo -e "\n${GREEN}Behaviour:${NC}"
     color_wrap_text "• ${YELLOW}--dry-run${NC}: Prints planned actions and skips changes, including service stop/start and file renames." 2
@@ -112,7 +113,6 @@ show_help() {
     log info "Displayed --help"
     exit 0
 }
-
 
 # ---------- Parse Arguments ----------
 SHOW_ALL_SIZES=false
@@ -361,7 +361,11 @@ get_storage_usage() {
     echo -e "\nMain Data Storage Usage:"
     DATAPART_USAGE=$(df -h | awk -v mnt="$DATA_LEVEL" '$NF==mnt {print}')
     [[ -z "$DATAPART_USAGE" ]] && DATAPART_USAGE=$(df -h "$DATA_PATH" | tail -1)
-    read -r DATA_DEVICE DATA_SIZE DATA_USED DATA_AVAIL DATA_USEP _ <<<"$DATAPART_USAGE"
+    # Allow space splitting just for this read
+    local OLDIFS="$IFS"
+    IFS=$' \t'
+    read -r DATA_DEVICE DATA_SIZE DATA_USED DATA_AVAIL DATA_USEP DATA_MNT <<<"$DATAPART_USAGE"
+    IFS="$OLDIFS"
     printf "Device: %s\n" "$DATA_DEVICE"
     printf "%-8s %-8s %-8s %-6s\n" "Size" "Used" "Avail" "Use%"
     printf "%-8s %-8s %-8s %-6s\n" "$DATA_SIZE" "$DATA_USED" "$DATA_AVAIL" "$DATA_USEP"
@@ -394,8 +398,11 @@ get_metadata_usage() {
         log "ERROR: df returned empty for $BASE_PATH"
         exit 1
     fi
-
-    read -r DEVICE SIZE USED AVAIL USEP _ <<<"$PART_USAGE"
+    # Temporarily allow splitting on spaces for df fields
+    local OLDIFS="$IFS"
+    IFS=$' \t'
+    read -r DEVICE SIZE USED AVAIL USEP MNT <<<"$PART_USAGE"
+    IFS="$OLDIFS"
 
     if [[ -z "$AVAIL" ]]; then
         echo -e "${RED}Error: Could not extract available space from metadata partition.${NC}"
