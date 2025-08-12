@@ -2,6 +2,16 @@
 
 # ---------- Constraints ----------
 readonly PAGE_SIZE=11
+readonly STOP_TIMEOUT=120  # seconds to wait for 'ocards' to fully stop
+readonly START_TIMEOUT=180 # seconds to wait for 'operational mode'
+
+# Start-up controls
+readonly START_TIMEOUT_DEFAULT=180
+readonly START_POLL_INTERVAL_DEFAULT=0.4
+
+# Tunables (overridden by flags)
+START_TIMEOUT="$START_TIMEOUT_DEFAULT"
+START_POLL_INTERVAL="$START_POLL_INTERVAL_DEFAULT"
 
 # ------ Set up logging ------
 RUN_TIMESTAMP=$(date "+%Y%m%d_%H%M%S")
@@ -26,13 +36,21 @@ NC='\033[0m'
 SHOW_ALL_SIZES=false
 DRY_RUN=false
 
-# Parse CLI flags
+FAST_START=false
+
 for arg in "$@"; do
     case "$arg" in
     --show-all-sizes) SHOW_ALL_SIZES=true ;;
     --dry-run) DRY_RUN=true ;;
+    --fast-start) FAST_START=true ;;
     esac
 done
+
+if $FAST_START; then
+    START_TIMEOUT=60         # tighter timeout
+    START_POLL_INTERVAL=0.15 # faster spinner/refresh
+    log info "FAST-START enabled (timeout=${START_TIMEOUT}s, poll=${START_POLL_INTERVAL}s)"
+fi
 
 declare DATA_PATH BASE_PATH DATA_LEVEL FIRST_LEVEL
 declare DATA_DEVICE DATA_SIZE DATA_USED DATA_AVAIL DATA_USEP
@@ -51,7 +69,15 @@ declare -A max_keys_map=(
     ["4224"]=366509468332
 )
 
-# ---------- Functions ----------
+# ---------- Functions / Helpers ----------
+
+get_system_state() {
+    system --show | awk -F':' '
+        /^System State/ {
+            gsub(/^ +| +$/, "", $2);
+            print $2
+        }'
+}
 
 show_progress_bar() {
     local GREEN='\033[0;32m'
@@ -76,6 +102,43 @@ show_progress_bar() {
 
     # Clear the line cleanly
     printf "\r\033[2K"
+}
+
+wait_for_service_stop() {
+    local service="$1"
+    local timeout="${2:-$STOP_TIMEOUT}"
+    local start ts state
+    local spinner='-\|/'
+
+    printf "Waiting for '%s' to stop " "$service"
+    start=$(date +%s)
+    local i=0
+
+    # Poll until inactive/failed/unknown or timeout
+    while true; do
+        state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
+        case "$state" in
+        inactive | failed | unknown | deactivating)
+            break
+            ;;
+        esac
+
+        # spin
+        i=$(((i + 1) % 4))
+        printf "\rWaiting for '%s' to stop %s" "$service" "${spinner:$i:1}"
+        sleep 0.2
+
+        ts=$(date +%s)
+        if ((ts - start >= timeout)); then
+            printf "\r\033[2K"
+            echo -e "${RED}Timeout waiting for '${service}' to stop (>${timeout}s).${NC}"
+            return 1
+        fi
+    done
+
+    printf "\r\033[2K"
+    echo -e "${GREEN}'${service}' is stopped (${state}).${NC}"
+    return 0
 }
 
 format_gib() {
@@ -687,11 +750,49 @@ confirm_expansion_plan() {
 }
 
 stop_services() {
-    echo "Stopping QoreStor services..."
-    # sudo systemctl stop ocards
-    echo "[TEST MODE] faked stopping of service"
-    echo "'ocards' service stopped."
-    log info "QoreStor services stopped. (actual or simulated)"
+    local service="ocards"
+    echo -e "\n${GREEN}Stopping QoreStor services (${service})${NC}"
+
+    # Current state (safe to query in dry-run)
+    local cur_state
+    cur_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
+
+    if $DRY_RUN; then
+        echo -e "${YELLOW}Dry Run Information:${NC}"
+        echo "• Current state     : ${cur_state}"
+        echo "• Command to run    : systemctl stop ${service}"
+        echo "• Wait strategy     : poll 'systemctl is-active' for up to ${STOP_TIMEOUT}s with spinner"
+        log info "Dry Run Information: state=${cur_state}, cmd='systemctl stop ${service}', wait=${STOP_TIMEOUT}s"
+        echo -e "${GREEN}Dry run complete. No changes made.${NC}"
+        return 0
+    fi
+
+    # If already stopped, don't bother
+    if [[ "$cur_state" == "inactive" || "$cur_state" == "failed" || "$cur_state" == "unknown" ]]; then
+        echo -e "${YELLOW}Service '${service}' is already ${cur_state}. Skipping stop.${NC}"
+        log info "Service ${service} already ${cur_state}; skip stop"
+        return 0
+    fi
+
+    # Attempt stop
+    if ! systemctl stop "$service"; then
+        echo -e "${YELLOW}systemctl stop returned non-zero; will still wait for state to change...${NC}"
+        log warn "systemctl stop ${service} returned non-zero; proceeding to wait"
+    else
+        log info "Issued 'systemctl stop ${service}'"
+    fi
+
+    # Wait with spinner
+    if wait_for_service_stop "$service" "$STOP_TIMEOUT"; then
+        log info "Service ${service} stopped within timeout"
+        return 0
+    else
+        local final_state
+        final_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
+        echo -e "${RED}Service '${service}' stop timeout. Final state: ${final_state}${NC}"
+        log error "Service ${service} stop timeout; final_state=${final_state}"
+        return 1
+    fi
 }
 
 extend_dictionary() {
@@ -791,12 +892,143 @@ extend_dictionary() {
     log info "Dictionary swap complete: active=${DICT_FILE}, backup=${backup}"
 }
 
+start_services() {
+    local service="ocards"
+    echo -e "\n${GREEN}Starting QoreStor services (${service})${NC}"
+
+    # Gather initial states (safe in dry-run)
+    local sys_state svc_state
+    sys_state=$(get_system_state 2>/dev/null || echo "unknown")
+    svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
+
+    if $DRY_RUN; then
+        echo -e "${YELLOW}Dry Run Information:${NC}"
+        echo "• Current System State : ${sys_state}"
+        echo "• Service State        : ${svc_state}"
+        echo "• Command to run       : systemctl start ${service}"
+        echo -e "• ${YELLOW}Wait strategy        : poll 'system --show' for 'System State: operational mode' and 'systemctl is-active' to be active, with spinner (timeout ${START_TIMEOUT}s)${NC}"
+        log info "Dry Run Information: start state sys='${sys_state}', svc='${svc_state}', cmd='systemctl start ${service}', wait=${START_TIMEOUT}s"
+        echo -e "${GREEN}Dry run complete. No changes made.${NC}"
+        return 0
+    fi
+
+    # Real run wait strategy output & log
+    echo -e "• ${YELLOW}Wait strategy        : poll 'system --show' for 'System State: operational mode' and 'systemctl is-active' to be active, with spinner (timeout ${START_TIMEOUT}s)${NC}"
+    log info "Wait strategy: poll 'system --show' for 'System State: operational mode' and 'systemctl is-active' to be active, timeout=${START_TIMEOUT}s, poll_interval=${START_POLL_INTERVAL}s"
+
+    # If already active, still wait for operational mode (after upgrades it may be starting up)
+    if [[ "$svc_state" != "active" ]]; then
+        if ! systemctl start "$service"; then
+            echo -e "${YELLOW}systemctl start returned non-zero; will still wait for states to stabilize...${NC}"
+            log warn "systemctl start ${service} returned non-zero; proceeding to wait"
+        else
+            log info "Issued 'systemctl start ${service}'"
+        fi
+    else
+        log info "Service ${service} already active; waiting for operational mode"
+    fi
+
+    # Spinner + dual-line live status
+    local spinner='-\|/'
+    local i=0
+    local start_ts now
+    start_ts=$(date +%s)
+
+    # Initial yellow display
+    echo -e "${YELLOW}Starting '${service}' …${NC}"
+    echo "System: ${sys_state} | Service: ${svc_state}"
+
+    while true; do
+        i=$(((i + 1) % 4))
+        local spin="${spinner:$i:1}"
+        sys_state=$(get_system_state 2>/dev/null || echo "unknown")
+        svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
+
+        printf "\033[2A" # move cursor up two lines
+        if [[ "${sys_state,,}" == "operational mode" ]]; then
+            printf "${GREEN}Starting '%s' %s${NC}\033[0K\n" "$service" "$spin"
+            printf "System: ${GREEN}%s${NC} | Service: %s\033[0K\n" "$sys_state" "$svc_state"
+            sleep 3
+            printf "\r\033[0K"
+            echo -e "${GREEN}System is operational. Startup sequence complete.${NC}"
+            log info "System operational; service=${service}, svc_state=${svc_state}"
+            return 0
+        else
+            printf "${YELLOW}Starting '%s' %s${NC}\033[0K\n" "$service" "$spin"
+            printf "System: %s | Service: %s\033[0K\n" "$sys_state" "$svc_state"
+        fi
+
+        now=$(date +%s)
+        if ((now - start_ts >= START_TIMEOUT)); then
+            printf "\r\033[2K"
+            echo -e "${RED}Timeout waiting for operational mode (>${START_TIMEOUT}s). Last state: System='${sys_state}', Service='${svc_state}'${NC}"
+            log error "Start timeout; sys_state='${sys_state}', svc_state='${svc_state}'"
+            return 1
+        fi
+
+        sleep "$START_POLL_INTERVAL"
+    done
+}
+
+confirm_expand_action() {
+    local prompt_prefix=""
+    $DRY_RUN && prompt_prefix="[DRY-RUN] "
+
+    while true; do
+        read -r -p "${prompt_prefix}Proceed with dictionary expansion? (cancel / skip / expand) [skip]: " choice
+        choice="${choice,,}" # lowercase for comparison
+        case "$choice" in
+        "" | "s" | "skip")
+            log info "User chose to skip dictionary expansion"
+            return 1 # skip
+            ;;
+        "e" | "expand")
+            log info "User chose to expand dictionary"
+            return 0 # proceed to expand
+            ;;
+        "c" | "cancel")
+            log info "User cancelled after service stop"
+            echo -e "${RED}Operation cancelled by user. Services remain stopped.${NC}"
+            exit 1
+            ;;
+        *)
+            echo -e "${YELLOW}Invalid choice. Please type 'cancel', 'skip', or 'expand'.${NC}"
+            ;;
+        esac
+    done
+}
+
+confirm_start_services() {
+    local prompt_prefix=""
+    $DRY_RUN && prompt_prefix="[DRY-RUN] "
+
+    while true; do
+        read -r -p "${prompt_prefix}Are you ready to restart services? (cancel / yes) [yes]: " choice
+        choice="${choice,,}" # lowercase for comparison
+        case "$choice" in
+        "" | "y" | "yes")
+            log info "User confirmed restart of services"
+            return 0 # proceed to start services
+            ;;
+        "c" | "cancel")
+            log info "User cancelled before service restart"
+            echo -e "${RED}Operation cancelled by user. Services remain stopped.${NC}"
+            exit 1
+            ;;
+        *)
+            echo -e "${YELLOW}Invalid choice. Please type 'cancel' or 'yes'.${NC}"
+            ;;
+        esac
+    done
+}
+
 # ---------- Main Entry Point ----------
 
 main() {
     # Show dry-run notice early
     $DRY_RUN && echo -e "${YELLOW}Running in DRY-RUN mode. No changes will be made.${NC}"
     $DRY_RUN && log "DRY-RUN mode enabled"
+    $FAST_START && echo -e "${YELLOW}FAST-START: timeout=${START_TIMEOUT}s, poll=${START_POLL_INTERVAL}s${NC}"
 
     show_system_info
     get_total_memory
@@ -819,7 +1051,18 @@ main() {
 
     if confirm_action; then
         stop_services
-        extend_dictionary
+
+        # expand or skip confirmation
+        if confirm_expand_action; then
+            extend_dictionary
+        else
+            log info "User chose to skip dictionary expansion"
+            echo -e "\n${YELLOW}Skipping dictionary expansion as per user request.${NC}"
+        fi
+
+        if confirm_start_services; then
+            start_services
+        fi
     else
         exit 1
     fi
