@@ -516,7 +516,6 @@ collect_dict_expansion_params() {
             echo -e "${RED}Invalid selection. Choose from the listed sizes only.${NC}"
             continue
         fi
-        log info "User selected NEW_SIZE=${NEW_SIZE} GiB; step_up=${step_up}"
 
         # Step-up calculation
         step_up=0
@@ -526,6 +525,7 @@ collect_dict_expansion_params() {
             fi
         done
         # After determining NEW_SIZE & step_up
+        log info "User selected NEW_SIZE=${NEW_SIZE} GiB; step_up=${step_up}"
         : "${DICT_SIZE_RAW:?missing DICT_SIZE_RAW}"
         : "${avail_metadata_gib:?missing avail_metadata_gib}"
         : "${NEW_SIZE:?missing NEW_SIZE}"
