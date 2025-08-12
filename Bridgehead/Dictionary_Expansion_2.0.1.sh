@@ -55,40 +55,65 @@ wrap_text() {
     ((bodywidth < 30)) && bodywidth=30
     echo "$text" | fold -s -w "$bodywidth" | sed "2,999s/^/$(printf '%*s' "$indent")/"
 }
+color_wrap_text() {
+    local text="$1" indent="$2"
+    local width; width=$(get_term_width)
+    local bodywidth=$(( width - indent ))
+    (( bodywidth < 30 )) && bodywidth=30
+
+    # Strip ANSI for wrapping calculations
+    local clean
+    clean=$(echo -e "$text" | sed 's/\x1B\[[0-9;]*[A-Za-z]//g')
+
+    # Wrap based on clean length, then reinsert color
+    echo -e "$clean" | fold -s -w "$bodywidth" | \
+        sed "2,999s/^/$(printf '%*s' "$indent")/" | \
+        while IFS= read -r line; do
+            # Replace clean words with original colorized ones
+            # (this works if no wrapping happens in middle of escape sequences)
+            local colored="$line"
+            colored=$(echo -e "$text" | sed 's/\\033/\x1B/g') # ensure colors render
+            echo -e "$colored"
+        done
+}
 
 # Prints an option row like: "  --flag           Description that wraps…"
 print_opt() {
     local opt="$1" desc="$2"
-    local indent_after_opt=22 # aligns wrapped description
-    printf "  %-20s " "$opt"
-    wrap_text "$desc" "$indent_after_opt"
+    local indent_after_opt=22
+    printf "  %-20b " "$opt"
+    color_wrap_text "$desc" "$indent_after_opt"
 }
 
 show_help() {
     echo -e "${GREEN}Usage:${NC} $0 [options]\n"
 
     echo -e "${GREEN}Options:${NC}"
-    print_opt "--help" "Show this help message and exit."
-    print_opt "--dry-run" "Run in simulation mode. No changes will be made. Prompts still appear; actions are only logged."
-    print_opt "--show-all-sizes" "Display all possible dictionary sizes regardless of current memory/disk limits."
-    print_opt "--fast-start" "Reduce service restart timeout and increase polling frequency for quicker testing."
+    print_opt "--help"            "Show this help message and exit."
+    print_opt "--dry-run"         "Run in simulation mode. No changes will be made. Prompts still appear; actions are only logged."
+    print_opt "--show-all-sizes"  "Display all possible dictionary sizes regardless of current memory/disk limits."
+    print_opt "--fast-start"      "Reduce service restart timeout and increase polling frequency for quicker testing."
 
     echo -e "\n${GREEN}Behaviour:${NC}"
-    wrap_text "• ${YELLOW}--dry-run${NC}: Prints planned actions and skips changes, including service stop/start and file renames." 2
-    wrap_text "• ${YELLOW}--fast-start${NC}: Uses smaller ${GREEN}START_TIMEOUT${NC} and faster ${GREEN}START_POLL_INTERVAL${NC}." 2
-    wrap_text "• ${YELLOW}--show-all-sizes${NC}: Lists sizes without filtering by memory/disk; actual selection still validated." 2
+    color_wrap_text "• ${YELLOW}--dry-run${NC}: Prints planned actions and skips changes, including service stop/start and file renames." 2
+    color_wrap_text "• ${YELLOW}--fast-start${NC}: Uses smaller ${GREEN}START_TIMEOUT${NC} and faster ${GREEN}START_POLL_INTERVAL${NC}." 2
+    color_wrap_text "• ${YELLOW}--show-all-sizes${NC}: Lists sizes without filtering by memory/disk; actual selection still validated." 2
 
     echo -e "\n${GREEN}Interactive confirmations:${NC}"
-    wrap_text "After stopping services: type ${GREEN}expand${NC}/${GREEN}e${NC} to extend, ${GREEN}skip${NC}/${GREEN}s${NC} (default) to skip, or ${RED}cancel${NC}/${RED}c${NC} to exit with services stopped." 2
-    wrap_text "Before restarting services: type ${GREEN}yes${NC}/${GREEN}y${NC} (default) to start, or ${RED}cancel${NC}/${RED}c${NC} to exit with services stopped." 2
+    color_wrap_text "After stopping services: type ${GREEN}expand${NC}/${GREEN}e${NC} to extend, ${GREEN}skip${NC}/${GREEN}s${NC} (default) to skip, or ${RED}cancel${NC}/${RED}c${NC} to exit with services stopped." 2
+    color_wrap_text "Before restarting services: type ${GREEN}yes${NC}/${GREEN}y${NC} (default) to start, or ${RED}cancel${NC}/${RED}c${NC} to exit with services stopped." 2
 
     echo -e "\n${GREEN}Examples:${NC}"
+    echo "  $0 --help"
     echo "  $0 --dry-run"
-    echo "  $0 --show-all-sizes"
     echo "  $0 --dry-run --fast-start"
     echo
+
+    log info "Displayed --help"
     exit 0
 }
+
+
 # ---------- Parse Arguments ----------
 SHOW_ALL_SIZES=false
 DRY_RUN=false
