@@ -1033,6 +1033,36 @@ start_services() {
         echo "• Command to run       : systemctl start ${service}"
         echo -e "• ${YELLOW}Wait strategy        : poll 'system --show' for 'System State: operational mode' and 'systemctl is-active' to be active, with spinner (timeout ${START_TIMEOUT}s)${NC}"
         log info "Dry Run Information: start state sys='${sys_state}', svc='${svc_state}', cmd='systemctl start ${service}', wait=${START_TIMEOUT}s"
+
+        if ! $FAST_START; then
+            # --- DRY-RUN spinner demo (only when NOT using --fast-start) ---
+            echo -e "${YELLOW}[DRY-RUN] Simulating wait with spinner...${NC}"
+            local spinner='-\|/'
+            local i=0
+            local demo_secs=3
+            local demo_start
+            demo_start=$(date +%s)
+
+            # print the two status lines once
+            echo -e "${YELLOW}Starting '${service}' …${NC}"
+            echo "System: ${sys_state} | Service: ${svc_state}"
+
+            while (($(date +%s) - demo_start < demo_secs)); do
+                i=$(((i + 1) % 4))
+                local spin="${spinner:$i:1}"
+
+                printf "\033[2A" # move cursor up 2 lines
+                printf "${YELLOW}Starting '%s' %s${NC}\033[0K\n" "$service" "$spin"
+                printf "System: %s | Service: %s\033[0K\n" "$sys_state" "$svc_state"
+                sleep "$START_POLL_INTERVAL"
+            done
+            printf "\r\033[0K"
+            log info "DRY-RUN spinner demo shown (FAST-START disabled)"
+        else
+            # No spinner demo in fast-start dry-run
+            log info "DRY-RUN spinner demo suppressed (FAST-START enabled)"
+        fi
+
         echo -e "${GREEN}Dry run complete. No changes made.${NC}"
         return 0
     fi
