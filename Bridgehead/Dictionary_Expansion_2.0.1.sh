@@ -113,6 +113,12 @@ show_help() {
     log info "Displayed --help"
     exit 0
 }
+# Render a command array as a single, shell-quoted line (ignores global IFS)
+cmdline() {
+    local out
+    printf -v out '%q ' "$@"
+    echo "${out% }"
+}
 
 # ---------- Parse Arguments ----------
 SHOW_ALL_SIZES=false
@@ -924,6 +930,7 @@ extend_dictionary() {
 
     # Build destination and backup paths
     local ts dest_path backup backup_rot cmd
+    backup_rot=""
     ts=$(date "+%Y%m%d_%H%M%S")
     dest_path="${BASE_PATH}/dict-${ts}"
     backup="${BASE_PATH}/dict2.old"
@@ -931,39 +938,39 @@ extend_dictionary() {
 
     # Compose command array
     cmd=(uhd_extend -p "$DICT_FILE" -s "$step_up" -k "$PAGE_SIZE" -d "$dest_path")
-
+    cmd_str=$(cmdline "${cmd[@]}")
     if $DRY_RUN; then
         echo -e "\n${YELLOW}Dry Run Information:${NC}"
         echo "• Dictionary file present : $([[ -e "$DICT_FILE" ]] && echo yes || echo no)"
         echo "• Current file            : $DICT_FILE"
-        if [[ -n "$backup_rot" ]]; then
+        if [[ -n "${backup_rot:-}" ]]; then
             echo "• Backup target (rotate)  : $backup -> $backup_rot"
         else
             echo "• Backup target           : $backup"
         fi
         echo "• New file to be created  : $dest_path"
         echo "• Activation rename       : ${dest_path} -> ${DICT_FILE}"
-        echo "• Command to run          : ${cmd[*]}"
+        echo "• Command to run          : $cmd_str"
 
         log info "Dry Run Information:"
         log info "Dictionary file present: $([[ -e "$DICT_FILE" ]] && echo yes || echo no)"
         log info "Current file: $DICT_FILE"
-        if [[ -n "$backup_rot" ]]; then
+        if [[ -n "${backup_rot:-}" ]]; then
             log info "Backup target (rotate): $backup -> $backup_rot"
         else
             log info "Backup target: $backup"
         fi
         log info "New file to be created: $dest_path"
         log info "Activation rename: ${dest_path} -> ${DICT_FILE}"
-        log info "Command to run: ${cmd[*]}"
+        log info "Command to run: $cmd_str"
 
         echo -e "${GREEN}Dry run complete. No changes made.${NC}"
         return 0
     fi
 
     # ---- Real execution path ----
-    echo "Running: ${cmd[*]}"
-    log info "Invoking uhd_extend: ${cmd[*]}"
+    echo "Running: $cmd_str"
+    log info "Invoking uhd_extend: $cmd_str"
 
     if ! "${cmd[@]}"; then
         echo -e "${RED}uhd_extend failed. Aborting.${NC}"
