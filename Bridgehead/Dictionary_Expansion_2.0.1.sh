@@ -450,6 +450,8 @@ get_dict_info() {
     fi
 
     echo "Using lookup size ${size_key} GiB → MAX KEYS: $MAX_KEYS_FMT"
+    export CUR_SIZE_INT="$FLOOR_GIB"
+    log info "Current dictionary size (int): ${CUR_SIZE_INT} GiB"
 }
 
 get_dedupe_stats() {
@@ -469,7 +471,7 @@ get_dedupe_stats() {
 
 collect_dict_expansion_params() {
     echo -e "\n${GREEN}Dictionary Expansion Options${NC}"
-    echo "Current dictionary size: $(format_gib "$DICT_SIZE_RAW") GiB"
+    echo "Current dictionary size: $(format_gib "$CUR_SIZE_INT") GiB"
 
     declare -A min_mem_required=(
         [64]=8
@@ -483,7 +485,7 @@ collect_dict_expansion_params() {
     )
 
     all_sizes=(64 128 256 384 640 1520 2176 4224)
-    CUR_SIZE_INT=${DICT_SIZE%.*}
+    : "${CUR_SIZE_INT:?missing CUR_SIZE_INT (set in get_dict_info)}"
 
     # Recalculate available space in GiB for filtering
     compute_avail_metadata_gib
@@ -512,13 +514,23 @@ collect_dict_expansion_params() {
 
     while true; do
         read -r -p "Enter the new desired dictionary size (GiB): " NEW_SIZE
-        # immediately after reading NEW_SIZE
-        NEW_SIZE=$(echo "$NEW_SIZE" | xargs) # trim
+        # Trim, remove stray Windows CRs, and validate numeric
+        NEW_SIZE=${NEW_SIZE//$'\r'/}
+        NEW_SIZE=$(echo "$NEW_SIZE" | xargs)
         [[ "$NEW_SIZE" =~ ^[0-9]+$ ]] || {
             echo -e "${RED}Please enter a numeric size from the list.${NC}"
             continue
         }
-        if [[ ! " ${valid_sizes[*]} " =~ " ${NEW_SIZE} " ]]; then
+
+        # Robust membership check against valid_sizes (integers)
+        found=0
+        for s in "${valid_sizes[@]}"; do
+            if ((NEW_SIZE == s)); then
+                found=1
+                break
+            fi
+        done
+        if ((!found)); then
             echo -e "${RED}Invalid selection. Choose from the listed sizes only.${NC}"
             continue
         fi
@@ -706,7 +718,7 @@ evaluate_max_supported_size() {
     )
 
     all_sizes=(64 128 256 384 640 1520 2176 4224)
-    CUR_SIZE_INT=${DICT_SIZE%.*}
+    : "${CUR_SIZE_INT:?missing CUR_SIZE_INT (set in get_dict_info)}"
 
     mem_limit=""
     disk_limit=""
@@ -817,7 +829,7 @@ confirm_expansion_plan() {
 
     echo
     echo -e "${GREEN}Summary of Proposed Expansion:${NC}"
-    echo "Current Dictionary Size : $(format_gib "$DICT_SIZE_RAW") GiB"
+    echo "Current Dictionary Size : ${CUR_SIZE_INT} GiB"
     echo "Selected New Size        : ${NEW_SIZE} GiB"
     echo "Step-up Level            : $step_up"
     echo "Page Size               : ${PAGE_SIZE}"
