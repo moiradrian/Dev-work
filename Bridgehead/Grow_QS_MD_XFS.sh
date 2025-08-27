@@ -96,8 +96,15 @@ _get_partnum() {
     fi
     echo "$k" | sed -E 's/^.*[^0-9]([0-9]+)$/\1/'
 }
+
 _get_parent_kname() {
-    local k="$(_get_kname "$1")" sys="/sys/class/block/$k"
+    # Parent disk kernel name for a partition (sysfs first, then fallbacks)
+    local k
+    k="$(_get_kname "$1")"
+
+    local sys
+    sys="/sys/class/block/$k"
+
     if [ -L "$sys" ]; then
         local parent
         parent="$(basename "$(dirname "$(readlink -f "$sys")")")"
@@ -106,10 +113,14 @@ _get_parent_kname() {
             return
         fi
     fi
+
+    # Try lsblk PKNAME if supported
     if lsblk -dn -o PKNAME "/dev/$k" >/dev/null 2>&1; then
         lsblk -dn -o PKNAME "/dev/$k"
         return
     fi
+
+    # String fallbacks for common naming schemes
     case "$k" in
     nvme*n[0-9]*) echo "${k%%p[0-9]*}" ;;
     mmcblk*[0-9]p*) echo "${k%%p[0-9]*}" ;;
@@ -148,19 +159,36 @@ _underlying_base_disks() {
 }
 
 # Per-disk rescan via sysfs (NVMe-aware)
+
 _rescan_one_base_disk() {
-    local disk="${1#/dev/}" sysdev="/sys/class/block/$disk" rescan="$sysdev/device/rescan"
+    local disk
+    disk="${1#/dev/}" # strip /dev/ if present
+
+    local sysdev
+    sysdev="/sys/class/block/$disk"
+
+    local rescan
+    rescan="$sysdev/device/rescan"
+
     if [[ -w "$rescan" ]]; then
         run_mut "echo 1 > $(printf %q "$rescan")"
         return 0
     fi
+
+    # NVMe controller rescan (namespaces), e.g. disk "nvme0n1" -> ctrl "nvme0"
     if [[ "$disk" =~ ^nvme[0-9]+n[0-9]+$ ]]; then
-        local ctrl="${disk%%n*}" ctrl_path="/sys/class/nvme/$ctrl/rescan"
+        local ctrl
+        ctrl="${disk%%n*}"
+
+        local ctrl_path
+        ctrl_path="/sys/class/nvme/$ctrl/rescan"
+
         if [[ -w "$ctrl_path" ]]; then
             run_mut "echo 1 > $(printf %q "$ctrl_path")"
             return 0
         fi
     fi
+
     warn "No writable rescan node for /dev/$disk (checked $rescan)."
     return 1
 }
