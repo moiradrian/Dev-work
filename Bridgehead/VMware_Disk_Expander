@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+# File: govc_expand_vmdk.sh
+#
+# Grow a VM's VMDK using govc.
+# - Defaults to selecting THIS VM via BIOS UUID when run inside the guest
+# - Or pass --vm "<name or inventory path>"
+# - Choose the disk by --disk-name "Hard disk 2" (default) or list with --list-disks
+# - Size is ABSOLUTE target size (e.g., 300G), not a delta
+# - Dry-run prints the exact govc calls without changing anything
+#
+# Requirements:
+#   - govc in PATH
+#   - vCenter reachable + creds (GOVC_URL, GOVC_USERNAME, GOVC_PASSWORD; GOVC_INSECURE=1 for self-signed)
+#     or pass --vc-url/--vc-user/--vc-pass/--insecure
+
+set -euo pipefail
+
+# ---------------- Defaults ----------------
+VM_SELECTOR=""           # set from --vm or derived from --uuid
+USE_UUID="auto"          # auto|yes|no (auto tries BIOS UUID if --vm not given)
+VM_UUID=""               # explicit override via --vm-uuid
+DISK_NAME="Hard disk 2"  # typical data disk; change as needed
+NEW_SIZE=""              # e.g., 300G (absolute)
+DRY_RUN="false"
+LIST_ONLY="false"
+FORCE_WITH_SNAPSHOTS="false"
+
+# vCenter auth (can also come from env)
+VC_URL="${GOVC_URL:-}"
+VC_USER="${GOVC_USERNAME:-}"
+VC_PASS="${GOVC_PASSWORD:-}"
+VC_INSECURE="${GOVC_INSECURE:-}"
+
+LOGFILE="${LOGFILE:-/var/log/govc_expand_vmdk_$(date +%Y%m%dT%H%M%S).log}"
+
+# ---------------- UI helpers ----------------
+log(){ echo "[+] $*" | tee -a "$LOGFILE"; }
+warn(){ echo "[!] $*" | tee -a "$LOGFILE" >&2; }
+die(){ echo "ERROR: $*" | tee -a "$LOGFILE" >&2; exit 1; }
+
+probe(){ bash -c "$*" 2>&1 | tee -a "$LOGFILE" || true; }
+run_mut(){
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo "DRY-RUN (skip): $*" | tee -a "$LOGFILE"
+  else
+    bash -c "$*" 2>&1 | tee -a "$LOGFILE"
+  fi
+}
+
+usage() {
+  cat <<EOF
+Usage: $0 --size <ABS_SIZE> [options]
+
+Required:
+  --size <ABS_SIZE>        Absolute target size for the VMDK (e.g., 300G, 1024G, 2T)
+
+VM selection (one of):
+  --vm "<name|path>"       VM by inventory name or path (e.g., "Folder/VM")
+  --vm-uuid <uuid>         VM by BIOS UUID (overrides auto)
+  (default)                Auto-detect BIOS UUID from /sys/class/dmi/id/product_uuid
+
+Disk selection:
+  --disk-name "Hard disk 2"   Disk display name to grow (default: "Hard disk 2")
+  --list-disks               List disks for the selected VM and exit
+
+vCenter auth (or use env GOVC_URL/GOVC_USERNAME/GOVC_PASSWORD/GOVC_INSECURE):
+  --vc-url https://vcenter.example.com
+  --vc-user svc_vmdk
+  --vc-pass '********'
+  --insecure                 Set GOVC_INSECURE=1 (self-signed certs)
+
+Other:
+  --dry-run                  Show what would happen; make no changes
+  --force-with-snapshots     Attempt grow even if snapshots exist (vSphere usually disallows)
+  -h, --help                 Show this help
+
+Examples:
+  $0 --size 300G                     # grow "Hard disk 2" of this VM (by BIOS UUID) to 300G
+  $0 --vm "Prod/DB01" --size 1T      # grow by VM name/path
+  $0 --list-disks                    # show disks, confirm the correct "Hard disk N" name
+EOF
+  exit 0
+}
+
+# ---------------- Arg parsing ----------------
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --size)          NEW_SIZE="$2"; shift 2 ;;
+      --vm)            VM_SELECTOR="$2"; USE_UUID="no"; shift 2 ;;
+      --vm-uuid)       VM_UUID="$2"; USE_UUID="yes"; shift 2 ;;
+      --disk-name)     DISK_NAME="$2"; shift 2 ;;
+      --list-disks)    LIST_ONLY="true"; shift ;;
+      --vc-url)        VC_URL="$2"; shift 2 ;;
+      --vc-user)       VC_USER="$2"; shift 2 ;;
+      --vc-pass)       VC_PASS="$2"; shift 2 ;;
+      --insecure)      VC_INSECURE="1"; shift ;;
+      --dry-run)       DRY_RUN="true"; shift ;;
+      --force-with-snapshots) FORCE_WITH_SNAPSHOTS="true"; shift ;;
+      -h|--help)       usage ;;
+      *) die "Unknown arg: $1 (use --help)";;
+    esac
+  done
+}
+
+# ---------------- Validation & setup ----------------
+need_cmd(){ command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"; }
+
+bios_uuid() {
+  local u=""
+  if [[ -r /sys/class/dmi/id/product_uuid ]]; then
+    u=$(tr 'A-Z' 'a-z' </sys/class/dmi/id/product_uuid | tr -d '\r\n')
+  fi
+  [[ -n "$u" ]] && echo "$u"
+}
+
+export_govc_env() {
+  [[ -n "$VC_URL"  ]] || die "vCenter URL missing: set GOVC_URL or pass --vc-url"
+  [[ -n "$VC_USER" ]] || die "vCenter user missing: set GOVC_USERNAME or pass --vc-user"
+  [[ -n "$VC_PASS" ]] || die "vCenter pass missing: set GOVC_PASSWORD or pass --vc-pass"
+  export GOVC_URL="$VC_URL" GOVC_USERNAME="$VC_USER" GOVC_PASSWORD="$VC_PASS"
+  [[ -n "$VC_INSECURE" ]] && export GOVC_INSECURE="$VC_INSECURE"
+}
+
+vm_flag() {
+  # Returns a string like: -vm 'VM-NAME'  (quoted for safety)
+  # Tries, in order: explicit --vm-uuid, auto BIOS UUID, then --vm name/path.
+  local flag=""
+  if [[ "$USE_UUID" == "yes" && -n "$VM_UUID" ]]; then
+    flag="-vm.uuid $(printf %q "$VM_UUID")"
+  elif [[ "$USE_UUID" == "auto" && -z "$VM_SELECTOR" ]]; then
+    local u; u=$(bios_uuid || true)
+    [[ -n "$u" ]] || die "Could not read BIOS UUID; pass --vm or --vm-uuid"
+    flag="-vm.uuid $(printf %q "$u")"
+  else
+    [[ -n "$VM_SELECTOR" ]] || die "VM selector missing; pass --vm or ensure BIOS UUID works"
+    flag="-vm $(printf %q "$VM_SELECTOR")"
+  fi
+  echo "$flag"
+}
+
+validate_size() {
+  # Accept forms like: 150G, 1024G, 2T, 500000 (bytes) — we pass through to govc.
+  [[ -n "$NEW_SIZE" || "$LIST_ONLY" == "true" ]] || die "--size is required unless --list-disks"
+}
+
+check_snapshots() {
+  local vmf; vmf="$(vm_flag)"
+  # Snapshot presence check: if output has any non-empty snapshot lines, warn
+  local out
+  out=$(eval "govc snapshot.tree $vmf" 2>/dev/null || true)
+  if [[ -n "$out" && "$out" != *"no snapshots"* && "$out" != *"No snapshots"* ]]; then
+    if [[ "$FORCE_WITH_SNAPSHOTS" == "true" ]]; then
+      warn "Snapshots appear to exist; attempting grow anyway (--force-with-snapshots)."
+    else
+      die "Snapshots appear to exist. Remove/consolidate snapshots or re-run with --force-with-snapshots."
+    fi
+  fi
+}
+
+list_disks() {
+  local vmf; vmf="$(vm_flag)"
+  log "Disks for VM:"
+  probe "govc device.ls $vmf | sed -n 's/^.*\\(Hard disk[^:]*\\):.*/\\1/p'"
+  exit 0
+}
+
+# ---------------- Main flow ----------------
+main() {
+  parse_args "$@"
+  : >"$LOGFILE"
+  need_cmd govc
+  export_govc_env
+  validate_size
+
+  if [[ "$LIST_ONLY" == "true" ]]; then
+    list_disks
+  fi
+
+  local vmf; vmf="$(vm_flag)"
+  log "Target VM selector: $vmf"
+  log "Target disk name  : $DISK_NAME"
+  log "New absolute size : ${NEW_SIZE}"
+
+  # Show current size for context
+  log "Current disk info (before):"
+  probe "govc device.info $vmf -name $(printf %q "$DISK_NAME")"
+
+  # Snapshots gate
+  check_snapshots
+
+  # Set new size (ABSOLUTE)
+  log "Expanding VMDK to ${NEW_SIZE}…"
+  run_mut "govc device.virtualdisk.set $vmf -name $(printf %q "$DISK_NAME") -size $(printf %q "$NEW_SIZE")"
+
+  # Show after info (if not dry-run)
+  log "Disk info (after):"
+  probe "govc device.info $vmf -name $(printf %q "$DISK_NAME")"
+
+  cat <<NOTE | tee -a "$LOGFILE"
+Next steps inside the guest:
+  • Rescan the specific disk (e.g., echo 1 > /sys/class/block/<disk>/device/rescan)
+  • Grow partition/LVM if applicable
+  • Run: xfs_growfs <mountpoint>
+NOTE
+}
+
+main "$@"
