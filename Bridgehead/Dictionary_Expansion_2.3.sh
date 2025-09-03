@@ -11,10 +11,16 @@ readonly STOP_TIMEOUT=120 # seconds to wait for 'ocards' to fully stop
 # Start-up controls
 START_TIMEOUT_DEFAULT=180 # seconds to wait for services to start
 START_POLL_INTERVAL_DEFAULT=0.4
+START_TIMEOUT_TOTAL_DEFAULT=900        # overall cap in seconds (e.g., 15 minutes)
+START_PROGRESS_GRACE_DEFAULT=60        # add this much time when Reason changes
+START_REASON_POLL_INTERVAL_DEFAULT=0.6 # how often to poll system --show Reason
 
 # Tunables (overridden by flags)
 START_TIMEOUT="$START_TIMEOUT_DEFAULT"
 START_POLL_INTERVAL="$START_POLL_INTERVAL_DEFAULT"
+START_TIMEOUT_TOTAL="$START_TIMEOUT_TOTAL_DEFAULT"
+START_PROGRESS_GRACE="$START_PROGRESS_GRACE_DEFAULT"
+START_REASON_POLL_INTERVAL="$START_REASON_POLL_INTERVAL_DEFAULT"
 
 # ------ Set up logging ------
 RUN_TIMESTAMP=$(date "+%Y%m%d_%H%M%S")
@@ -144,6 +150,9 @@ for arg in "$@"; do
         # set your faster tunables here if not already done elsewhere
         START_TIMEOUT=60
         START_POLL_INTERVAL=0.15
+        START_TIMEOUT_TOTAL=120
+        START_PROGRESS_GRACE=15
+        START_REASON_POLL_INTERVAL=0.2
         ;;
     *)
         echo -e "${YELLOW}Unknown option: ${arg}${NC}"
@@ -1043,56 +1052,26 @@ start_services() {
     echo -e "\n${GREEN}Starting QoreStor services (${service})${NC}"
 
     # Gather initial states (safe in dry-run)
-    local sys_state svc_state
-    sys_state=$(get_system_state 2>/dev/null || echo "unknown")
+    local svc_state sys_reason
     svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
+    sys_reason=$(get_system_reason 2>/dev/null || echo "")
 
     if $DRY_RUN; then
         echo -e "${YELLOW}Dry Run Information:${NC}"
-        echo "• Current System State : ${sys_state}"
-        echo "• Service State        : ${svc_state}"
-        echo "• Command to run       : systemctl start ${service}"
-        echo -e "• ${YELLOW}Wait strategy        : poll 'system --show' until Reason='Filesystem is fully operational for I/O.' and 'systemctl is-active' becomes active (timeout ${START_TIMEOUT}s)${NC}"
-        log info "Dry Run: Wait strategy: poll 'system --show' Reason='Filesystem is fully operational for I/O.' and 'systemctl is-active' active; timeout=${START_TIMEOUT}s, poll_interval=${START_POLL_INTERVAL}s"
-
-        if ! $FAST_START; then
-            # --- DRY-RUN spinner demo (only when NOT using --fast-start) ---
-            echo -e "${YELLOW}[DRY-RUN] Simulating wait with spinner...${NC}"
-            local spinner='-\|/'
-            local i=0
-            local demo_secs=3
-            local demo_start
-            demo_start=$(date +%s)
-
-            # print the two status lines once
-            echo -e "${YELLOW}Starting '${service}' …${NC}"
-            echo "System: ${sys_state} | Service: ${svc_state}"
-
-            while (($(date +%s) - demo_start < demo_secs)); do
-                i=$(((i + 1) % 4))
-                local spin="${spinner:$i:1}"
-
-                printf "\033[2A" # move cursor up 2 lines
-                printf "${YELLOW}Starting '%s' %s${NC}\033[0K\n" "$service" "$spin"
-                printf "System: %s | Service: %s\033[0K\n" "$sys_state" "$svc_state"
-                sleep "$START_POLL_INTERVAL"
-            done
-            printf "\r\033[0K"
-            log info "DRY-RUN spinner demo shown (FAST-START disabled)"
-        else
-            # No spinner demo in fast-start dry-run
-            log info "DRY-RUN spinner demo suppressed (FAST-START enabled)"
-        fi
-
+        echo "• Current System Reason : ${sys_reason:-<none>}"
+        echo "• Service State         : ${svc_state}"
+        echo "• Command to run        : systemctl start ${service}"
+        echo -e "• ${YELLOW}Wait strategy        : poll 'system --show' until Reason='Filesystem is fully operational for I/O.' and 'systemctl is-active' becomes active (timeout ${START_TIMEOUT_TOTAL}s)${NC}"
+        log info "Dry Run Information: start sys_reason='${sys_reason}', svc='${svc_state}', cmd='systemctl start ${service}', wait=${START_TIMEOUT_TOTAL}s"
         echo -e "${GREEN}Dry run complete. No changes made.${NC}"
         return 0
     fi
 
     # Real run wait strategy output & log
-    echo -e "• ${YELLOW}Wait strategy        : poll 'system --show' until Reason='Filesystem is fully operational for I/O.' and 'systemctl is-active' becomes active (timeout ${START_TIMEOUT}s)${NC}"
-    log info "Wait strategy: poll 'system --show' Reason='Filesystem is fully operational for I/O.' and 'systemctl is-active' active; timeout=${START_TIMEOUT}s, poll_interval=${START_POLL_INTERVAL}s"
+    echo -e "• ${YELLOW}Wait strategy        : poll 'system --show' until Reason='Filesystem is fully operational for I/O.' and 'systemctl is-active' becomes active (timeout ${START_TIMEOUT_TOTAL}s)${NC}"
+    log info "Wait strategy: until Reason='Filesystem is fully operational for I/O.' and service active; timeout=${START_TIMEOUT_TOTAL}s, poll_interval=${START_REASON_POLL_INTERVAL}s"
 
-    # If already active, still wait for operational mode (after upgrades it may be starting up)
+    # If not already active, try to start
     if [[ "$svc_state" != "active" ]]; then
         if ! systemctl start "$service"; then
             echo -e "${YELLOW}systemctl start returned non-zero; will still wait for states to stabilize...${NC}"
@@ -1101,56 +1080,81 @@ start_services() {
             log info "Issued 'systemctl start ${service}'"
         fi
     else
-        log info "Service ${service} already active; waiting for operational mode"
+        log info "Service ${service} already active; waiting for Reason to reach I/O readiness"
     fi
 
-    # Spinner + dual-line live status
     local spinner='-\|/'
     local i=0
     local start_ts now
-    start_ts=$(date +%s)
+    local deadline progress_deadline
+    local last_reason="${sys_reason}"
 
-    # Initial yellow display
+    start_ts=$(date +%s)
+    deadline=$((start_ts + START_TIMEOUT_TOTAL))
+    progress_deadline="$deadline"
+
+    # Initial two lines
     echo -e "${YELLOW}Starting '${service}' …${NC}"
-    echo "Reason: $(get_system_reason 2>/dev/null || echo unknown) | Service: ${svc_state}"
+    echo "Reason: ${last_reason:-<none>} | Service: ${svc_state}"
 
     while true; do
         i=$(((i + 1) % 4))
         local spin="${spinner:$i:1}"
-        sys_state=$(get_system_state 2>/dev/null || echo "unknown")
-        sys_reason=$(get_system_reason 2>/dev/null || echo "unknown")
+
+        # Refresh states
         svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
+        sys_reason=$(get_system_reason 2>/dev/null || echo "")
 
-        # normalize reason for comparison (lowercase)
-        norm_reason="${sys_reason,,}"
+        # If Reason changed, show it and extend grace
+        if [[ "$sys_reason" != "$last_reason" && -n "$sys_reason" ]]; then
+            # Extend the deadline by grace, capped by original cap + (many progress bumps allowed)
+            local now_ts
+            now_ts=$(date +%s)
+            progress_deadline=$((now_ts + START_PROGRESS_GRACE))
+            last_reason="$sys_reason"
+            log info "Progress: Reason changed to '${sys_reason}', extending grace by ${START_PROGRESS_GRACE}s"
+        fi
 
-        printf "\033[2A"
-        if [[ "$norm_reason" == "filesystem is fully operational for i/o." ]]; then
+        # Update the two lines in place
+        printf "\033[2A" # up two lines
+        # spinner line
+        printf "${YELLOW}Starting '%s' %s${NC}\033[0K\n" "$service" "$spin"
+        # reason line
+        printf "Reason: %s | Service: %s\033[0K\n" "${sys_reason:-<none>}" "$svc_state"
+
+        # Check success criteria
+        if [[ "${svc_state}" == "active" && "${sys_reason}" == "Filesystem is fully operational for I/O." ]]; then
+            # Paint green, pause for readability, then confirm
+            printf "\033[2A"
             printf "${GREEN}Starting '%s' %s${NC}\033[0K\n" "$service" "$spin"
             printf "Reason: ${GREEN}%s${NC} | Service: %s\033[0K\n" "$sys_reason" "$svc_state"
             sleep 3
             printf "\r\033[0K"
-            echo -e "${GREEN}System is operational for I/O. Startup sequence complete.${NC}"
-            log info "System operational for I/O; reason='${sys_reason}', service='${svc_state}'"
-            echo -e "\n${GREEN}Final system state:${NC}"
-            system --show
-            log info "Final system --show output captured after successful startup"
+            echo -e "${GREEN}System is operational. Startup sequence complete.${NC}"
+            log info "System operational; svc_state=${svc_state}"
+            # Final proof-of-life output
+            echo
+            echo -e "${GREEN}System Information (post-start):${NC}"
+            system --show | awk -F':' '/^(System Name|Current Time|System ID|Version|Build|System State|Reason)/ {
+                sub(/^[ \t]+/, "", $2);
+                printf "%-30s: %s\n", $1, $2
+            }'
             return 0
-        else
-            printf "${YELLOW}Starting '%s' %s${NC}\033[0K\n" "$service" "$spin"
-            printf "Reason: %s | Service: %s\033[0K\n" "$sys_reason" "$svc_state"
         fi
 
+        # Timeout logic:
+        # - absolute deadline
+        # - and also a "progress grace" that rolls forward after each Reason change
         now=$(date +%s)
-        if ((now - start_ts >= START_TIMEOUT)); then
+        if ((now >= deadline)) && ((now >= progress_deadline)); then
             printf "\r\033[2K"
-            echo -e "${RED}Timeout waiting for system I/O readiness (>${START_TIMEOUT}s).${NC}"
-            echo "Last observed → Reason: '${sys_reason}' | System State: '${sys_state}' | Service: '${svc_state}'"
-            log error "Start timeout; reason='${sys_reason}', sys_state='${sys_state}', svc_state='${svc_state}'"
+            echo -e "${RED}Timeout waiting for system I/O readiness (>${START_TIMEOUT_TOTAL}s).${NC}"
+            echo "Last observed - Reason: '${sys_reason}' | Service: '${svc_state}'"
+            log error "Start timeout; last_reason='${sys_reason}', svc_state='${svc_state}'"
             return 1
         fi
 
-        sleep "$START_POLL_INTERVAL"
+        sleep "$START_REASON_POLL_INTERVAL"
     done
 }
 
@@ -1251,7 +1255,7 @@ main() {
         exit 1
     fi
 
-    echo -e "\nDone. System is ready for next steps."
+    echo -e "\nDone. System is ready."
 }
 
 main "$@"
