@@ -223,43 +223,47 @@ show_progress_bar() {
 wait_for_service_stop() {
     local service="$1"
     local timeout="${2:-$STOP_TIMEOUT}"
-    local start ts
+
     local spinner='-\|/'
     local i=0
+    local start_ts
+    start_ts=$(date +%s)
 
-    echo "Stopping '${service}' …"
-    echo "System: (querying) | Service: (querying)"
+    # Initial snapshot
+    local sys_state svc_state
+    sys_state=$(get_system_state 2>/dev/null || echo "unknown")
+    svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
 
-    start=$(date +%s)
+    echo -e "${YELLOW}Stopping '${service}' …${NC}"
+    echo "System: ${sys_state} | Service: ${svc_state}"
+
     while true; do
-        # probe states
-        local svc_state sys_state
-        svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
-        sys_state=$(get_system_state 2>/dev/null || echo "unknown")
-
-        # success conditions:
-        # - service is inactive/failed
-        # - OR system state says "Stopped" (case-insensitive, trimmed)
-        if [[ "$svc_state" == "inactive" || "$svc_state" == "failed" || "${sys_state,,}" == "stopped" ]]; then
-            printf "\033[2A" # move cursor up two lines
-            printf "${GREEN}Stopping '%s' ✓${NC}\033[0K\n" "$service"
-            printf "System: ${GREEN}%s${NC} | Service: %s\033[0K\n" "$sys_state" "$svc_state"
-            return 0
-        fi
-
-        # spinner repaint
         i=$(((i + 1) % 4))
         local spin="${spinner:$i:1}"
-        printf "\033[2A" # up 2
-        printf "Stopping '%s' %s\033[0K\n" "$service" "$spin"
-        printf "System: %s | Service: %s\033[0K\n" "$sys_state" "$svc_state"
 
-        # timeout?
-        ts=$(date +%s)
-        if ((ts - start >= timeout)); then
+        # Refresh states
+        sys_state=$(get_system_state 2>/dev/null || echo "unknown")
+        svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
+
+        # Repaint the two lines
+        printf "\033[2A"
+        if [[ "${sys_state,,}" == "stopped" ]]; then
+            printf "${GREEN}Stopping '%s' %s${NC}\033[0K\n" "$service" "$spin"
+            printf "System: ${GREEN}%s${NC} | Service: %s\033[0K\n" "$sys_state" "$svc_state"
+            sleep 1
+            printf "\r\033[0K"
+            log info "Stop complete: System State='${sys_state}', service='${service}', svc_state='${svc_state}'"
+            return 0
+        else
+            printf "${YELLOW}Stopping '%s' %s${NC}\033[0K\n" "$service" "$spin"
+            printf "System: %s | Service: %s\033[0K\n" "$sys_state" "$svc_state"
+        fi
+
+        # Timeout?
+        if (($(date +%s) - start_ts >= timeout)); then
             printf "\r\033[2K"
-            echo -e "${RED}Timeout waiting for '${service}' to stop (>${timeout}s).${NC}"
-            echo "Last observed states → System: '${sys_state}' | Service: '${svc_state}'"
+            echo -e "${RED}Timeout waiting for system to reach 'Stopped' (>${timeout}s). Last: System='${sys_state}', Service='${svc_state}'${NC}"
+            log error "Stop timeout: last System State='${sys_state}', svc_state='${svc_state}'"
             return 1
         fi
 
