@@ -197,9 +197,14 @@
             <option value="365">Yearly</option>
           </select>
         </div>
-
       </fieldset>
-
+      <script>
+        const useIncrEl = document.getElementById('useIncrementals');
+        const fullSchedEl = document.getElementById('fullSchedule');
+        useIncrEl.addEventListener('change', () => {
+          fullSchedEl.disabled = !useIncrEl.checked;
+        });
+      </script>
       <div id="controls">
         <div class="control-row">
           <button id="generateBtn">Generate Charts</button>
@@ -225,6 +230,13 @@
       <p><strong>Deduplication Post-Compression:</strong> <span id="finalEfficiency">-</span>%</p>
       <p><strong>Total Cloud Data:</strong> <span id="totalCloud">-</span> TiB</p>
       <p><strong>Total Local Data:</strong> <span id="totalLocal">-</span> TiB</p>
+      <p><strong>Full Backups (created / retained):</strong>
+        <span id="statFullCreated">-</span> / <span id="statFullRetained">-</span>
+      </p>
+      <p><strong>Incrementals (created / retained):</strong>
+        <span id="statIncrCreated">-</span> / <span id="statIncrRetained">-</span>
+      </p>
+
 
       <div id="recommendedConfig">
         <h2>Recommended Configuration</h2>
@@ -312,140 +324,123 @@
       const {
         days, sourceSizeTiB, changeRate, compressionPercent,
         dailyRetention, weeklyRetention, monthlyRetention,
-        yearlyRetention, cloudDelay, initialCompression
+        yearlyRetention, cloudDelay, initialCompression,
+        useIncrementals = false, fullEveryDays = 30
       } = params;
 
+      // ⏳ Time-series arrays
+      const storedDataOverTime = [];
+      const uncompressedDataOverTime = [];
+      const compressedDataOverTime = [];
       const storedLocallyOverTime = [];
       const storedInCloudOverTime = [];
       const dedupeEfficiencyOverTime = [];
       const dedupePreCompressionOverTime = [];
+      const retainedLogicalOverTime = [];
       const retainedCountsOverTime = [];
-      const compressedDataOverTime = [];
       const uncompressedLocalOverTime = [];
       const uncompressedCloudOverTime = [];
-      const blockMapOverTime = [];
       const requiredKeysSeries = [];
       const dictionarySizesOverTime = [];
       const tierMetaOverTime = [];
-      const dailyUncompressedDelta = [];
-      const dailyCompressedDelta = [];
-      const dailyRefCounts = [];
-      const dailyRefCountsLocal = [];
-      const dailyRefCountsCloud = [];
 
-      const dailyCut = dailyRetention;
-      const weeklyCut = dailyCut + weeklyRetention * 7;
-      const monthlyCut = weeklyCut + monthlyRetention * 30;
-      const yearlyCut = monthlyCut + yearlyRetention * 365;
-
+      // 📦 Backup log
       const backupLog = [];
-      let lastSnapshotTiB = sourceSizeTiB;
-      let lastCompressedArchive = 0;
+      let lastSnapshot = sourceSizeTiB;
+      let fullsCreated = 0;
+      let incrementalsCreated = 0;
 
-      // 1) build snapshots
+      // 1️⃣ Generate backup log
       for (let day = 0; day < days; day++) {
-        const effectiveCompression = (day === 0) ? initialCompression : compressionPercent;
-        const deltaTiB = (day === 0) ? sourceSizeTiB : sourceSizeTiB * changeRate;
-        const logicalTiB = (day === 0) ? sourceSizeTiB : lastSnapshotTiB + deltaTiB;
-        const compressedDeltaTiB = deltaTiB * (1 - effectiveCompression);
-        const fullCompressedTiB = logicalTiB * (1 - effectiveCompression);
-        lastCompressedArchive = (day === 0) ? fullCompressedTiB : lastCompressedArchive + compressedDeltaTiB;
+        const isFull = !useIncrementals || day % fullEveryDays === 0;
 
-        dailyUncompressedDelta.push(deltaTiB);
-        dailyCompressedDelta.push(compressedDeltaTiB);
-        lastSnapshotTiB = logicalTiB;
+        const compressionRamp = Math.min(1, day / 3);
+        const effectiveCompression = compressionPercent * compressionRamp;
+        const logicalSize = isFull
+          ? lastSnapshot * (1 + changeRate)
+          : lastSnapshot * changeRate;
+
+        const dedupedSize = isFull
+          ? logicalSize
+          : logicalSize;
+
+        const compressedSize = dedupedSize * (1 - effectiveCompression);
+        const fullCompressedSize = logicalSize * (1 - effectiveCompression);
+
+        if (isFull) {
+          lastSnapshot = logicalSize;
+          fullsCreated++;
+        } else {
+          incrementalsCreated++;
+        }
 
         const tiers = ['daily'];
         if (day % 7 === 0) tiers.push('weekly');
         if (day % 30 === 0) tiers.push('monthly');
         if (day % 365 === 0) tiers.push('yearly');
 
-        backupLog.push({ day, deltaTiB, logicalTiB, compressedDeltaTiB, fullCompressedTiB, tiers });
+        backupLog.push({
+          day, logicalSize, dedupedSize, compressedSize, fullCompressedSize, isFull, tiers
+        });
       }
 
-      // 2) apply retention + split
-      for (let today = 0; today < days; today++) {
-        let kept = 0;
-        let sumComp = 0;
-        let sumUncomp = 0;
-        let localComp = 0, cloudComp = 0;
-        let localUnc = 0, cloudUnc = 0;
+      // 2️⃣ Retention simulation
+      for (let currentDay = 0; currentDay < days; currentDay++) {
+        let totalLogical = 0;
+        let totalUncompressed = 0;
+        let totalCompressed = 0;
+        let localSum = 0;
+        let cloudSum = 0;
+        let uncompressedLocal = 0;
+        let uncompressedCloud = 0;
+        let retainedCount = 0;
 
-        for (const snap of backupLog) {
-          const age = today - snap.day;
+        for (const b of backupLog) {
+          const age = currentDay - b.day;
           if (age < 0) continue;
 
           const keep =
-            (age < dailyCut)
-            || (age >= dailyCut && age < weeklyCut && snap.tiers.includes('weekly'))
-            || (age >= weeklyCut && age < monthlyCut && snap.tiers.includes('monthly'))
-            || (age >= monthlyCut && age < yearlyCut && snap.tiers.includes('yearly'));
+            (age < dailyRetention) ||
+            (b.tiers.includes('weekly') && age < weeklyRetention * 7) ||
+            (b.tiers.includes('monthly') && age < monthlyRetention * 30) ||
+            (b.tiers.includes('yearly') && age < yearlyRetention * 365);
           if (!keep) continue;
 
-          kept++;
-          sumUncomp += snap.deltaTiB;
+          const contrib = (b.day === 0) ? b.fullCompressedSize : b.compressedSize;
 
-          const cTiB = (snap.day === 0) ? snap.fullCompressedTiB : snap.compressedDeltaTiB;
-          sumComp += cTiB;
+          totalLogical += b.logicalSize;
+          totalUncompressed += b.dedupedSize;
+          totalCompressed += contrib;
+          retainedCount++;
 
-          if (snap.day === 0) {
-            localUnc += snap.deltaTiB;
-            localComp += snap.fullCompressedTiB;
-            if (age >= cloudDelay) {
-              cloudUnc += snap.deltaTiB;
-              cloudComp += snap.fullCompressedTiB;
-            }
-          } else if (age < cloudDelay) {
-            localUnc += snap.deltaTiB;
-            localComp += snap.compressedDeltaTiB;
+          if (b.day === 0 || age < cloudDelay) {
+            localSum += contrib;
+            uncompressedLocal += b.dedupedSize;
           } else {
-            cloudUnc += snap.deltaTiB;
-            cloudComp += snap.compressedDeltaTiB;
+            cloudSum += contrib;
+            uncompressedCloud += b.dedupedSize;
           }
         }
 
-        retainedCountsOverTime.push(kept);
-        compressedDataOverTime.push(sumComp);
-        uncompressedLocalOverTime.push(localUnc);
-        uncompressedCloudOverTime.push(cloudUnc);
-        storedLocallyOverTime.push(localComp);
-        storedInCloudOverTime.push(cloudComp);
+        storedDataOverTime.push(totalCompressed);
+        uncompressedDataOverTime.push(totalUncompressed);
+        compressedDataOverTime.push(totalCompressed);
+        storedLocallyOverTime.push(localSum);
+        storedInCloudOverTime.push(cloudSum);
+        uncompressedLocalOverTime.push(uncompressedLocal);
+        uncompressedCloudOverTime.push(uncompressedCloud);
+        retainedLogicalOverTime.push(totalLogical);
+        retainedCountsOverTime.push(retainedCount);
 
-        const rawHeld = sourceSizeTiB * kept;
-        const prePct = rawHeld > 0 ? ((rawHeld - sumUncomp) / rawHeld) * 100 : 0;
-        const postPct = rawHeld > 0 ? ((rawHeld - sumComp) / rawHeld) * 100 : 0;
-        dedupePreCompressionOverTime.push(Math.max(0, prePct));
-        dedupeEfficiencyOverTime.push(Math.max(0, postPct));
+        // efficiency
+        const postComp = totalLogical > 0 ? (totalLogical - totalCompressed) / totalLogical * 100 : 0;
+        const preComp = totalLogical > 0 ? (totalLogical - totalUncompressed) / totalLogical * 100 : 0;
 
-        blockMapOverTime.push((sourceSizeTiB * kept) * 3);
-
-        const footprintTiB = localComp + cloudComp;
-        const keys = Math.floor(footprintTiB * (1024 ** 3) / 8);
-        requiredKeysSeries.push(keys);
-        const match = keyLookupTable.find(k => keys >= k.min && keys <= k.max) || {};
-        dictionarySizesOverTime.push(match.Size || 'N/A');
-        tierMetaOverTime.push(match);
-
-        // refcounts
-        const bytesLocal = localUnc * 2 ** 40;
-        const entriesLocal = bytesLocal / (32 * 2 ** 20);
-        const refBytesLocal = entriesLocal * 4096;
-        const refGiBLocal = refBytesLocal / 2 ** 30;
-        dailyRefCountsLocal.push(refGiBLocal);
-
-        const bytesCloud = cloudUnc * 2 ** 40;
-        const entriesCloud = bytesCloud / (4 * 2 ** 20);
-        const refBytesCloud = entriesCloud * 4096;
-        const refGiBCloud = refBytesCloud / 2 ** 30;
-        dailyRefCountsCloud.push(refGiBCloud);
-
-        const bytesUnc = sumUncomp * 2 ** 40;
-        const entries = bytesUnc / (32 * 2 ** 20);
-        const refBytes = entries * 4096;
-        const refGiB = refBytes / 2 ** 30;
-        dailyRefCounts.push(refGiB);
+        dedupeEfficiencyOverTime.push(Math.max(0, postComp));
+        dedupePreCompressionOverTime.push(Math.max(0, preComp));
       }
 
+      // 3️⃣ Final stats
       const stats = {
         totalLogicalTiB: sourceSizeTiB * days,
         heldRawDataTiB: sourceSizeTiB * retainedCountsOverTime.at(-1),
@@ -456,26 +451,47 @@
         totalStoredTiB: (storedLocallyOverTime.at(-1) || 0) + (storedInCloudOverTime.at(-1) || 0),
         dedupePreCompressionPct: dedupePreCompressionOverTime.at(-1) || 0,
         dedupePostCompressionPct: dedupeEfficiencyOverTime.at(-1) || 0,
-        totalCompressedTiB: compressedDataOverTime.at(-1) || 0
+        totalCompressedTiB: compressedDataOverTime.at(-1) || 0,
+        fullsCreated,
+        incrementalsCreated,
+        fullsRetained: backupLog.filter(b => b.isFull).length,
+        incrementalsRetained: backupLog.filter(b => !b.isFull).length
+      };
+      // 📖 Dictionary simulation
+      retainedLogicalOverTime.forEach(logicalTiB => {
+        const numKeys = Math.floor((logicalTiB * 1024 ** 3) / 32); // 32B blocks
+        requiredKeysSeries.push(numKeys);
+        const match = keyLookupTable.find(k => numKeys >= k.min && numKeys <= k.max) || {};
+        tierMetaOverTime.push(match);
+        dictionarySizesOverTime.push(match.Size || 'N/A');
+      });
+
+      // Final dictionary stats
+      const logicalDedupedTiB = stats.totalLogicalTiB - stats.totalStoredTiB;
+      const finalKeys = Math.floor((logicalDedupedTiB * 1024 ** 3) / 32);
+      const finalTier = keyLookupTable.find(k => finalKeys >= k.min && finalKeys <= k.max) || {};
+      const usedPct = finalTier.max ? finalKeys / finalTier.max * 100 : 0;
+      stats.dictionary = {
+        requiredKeys: finalKeys,
+        tier: finalTier,
+        usedPct
       };
 
-      const finalKeys = requiredKeysSeries.at(-1) || 0;
-      const finalTier = tierMetaOverTime.at(-1) || { max: 0, Size: 'N/A', Base_RAM: 'N/A', Additional_RAM: 'N/A', Shift: 'N/A', Page_Shift: 'N/A' };
-      const usedPct = finalTier.max ? (finalKeys / finalTier.max) * 100 : 0;
-      stats.dictionary = { requiredKeys: finalKeys, tier: finalTier, usedPct };
-
       return {
-        // series
-        storedLocallyOverTime, storedInCloudOverTime,
+        storedDataOverTime,
+        uncompressedDataOverTime,
         compressedDataOverTime,
-        dedupeEfficiencyOverTime, dedupePreCompressionOverTime,
+        storedLocallyOverTime,
+        storedInCloudOverTime,
+        dedupeEfficiencyOverTime,
+        dedupePreCompressionOverTime,
+        retainedLogicalOverTime,
         retainedCountsOverTime,
-        blockMapOverTime,
-        dailyUncompressedDelta, dailyCompressedDelta,
-        uncompressedLocalOverTime, uncompressedCloudOverTime,
-        requiredKeysSeries, dictionarySizesOverTime, tierMetaOverTime,
-        dailyRefCounts, dailyRefCountsLocal, dailyRefCountsCloud,
-        // stats
+        uncompressedLocalOverTime,
+        uncompressedCloudOverTime,
+        requiredKeysSeries,
+        dictionarySizesOverTime,
+        tierMetaOverTime,
         stats
       };
     }
@@ -542,11 +558,11 @@
 
     function updateStats(stats, blockMapOverTime, dailyRefCountsLocal, dailyRefCountsCloud) {
       const el = (id) => document.getElementById(id);
-
-      const finalLocal = dailyRefCountsLocal.at(-1) || 0;
-      const finalCloud = dailyRefCountsCloud.at(-1) || 0;
+      const finalLocal = Array.isArray(dailyRefCountsLocal) ? dailyRefCountsLocal.at(-1) || 0 : 0;
+      const finalCloud = Array.isArray(dailyRefCountsCloud) ? dailyRefCountsCloud.at(-1) || 0 : 0;
       const finalTotal = finalLocal + finalCloud;
-      const lastBlockMapGiB = blockMapOverTime.at(-1) || 0;
+      const lastBlockMapGiB = Array.isArray(blockMapOverTime) ? blockMapOverTime.at(-1) || 0 : 0;
+
 
       el('finalRefCountLocal').textContent = finalLocal.toFixed(2);
       el('finalRefCountCloud').textContent = finalCloud.toFixed(2);
@@ -557,7 +573,8 @@
       el('totalCloud').textContent = stats.totalCloudStoredTiB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       el('totalLocal').textContent = stats.totalLocalStoredTiB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       el('heldRawDataTiB').textContent = stats.heldRawDataTiB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      el('snapshotsHeld').textContent = stats.snapshotsHeld.toLocaleString();
+      el('snapshotsHeld').textContent = (stats.snapshotsHeld ?? 0).toLocaleString();
+
 
       el('dedupePreCompression').textContent = stats.dedupePreCompressionPct.toFixed(2);
       el('finalEfficiency').textContent = stats.dedupePostCompressionPct.toFixed(2);
@@ -565,12 +582,19 @@
       el('blockMapSize').textContent = lastBlockMapGiB.toFixed(2);
 
       // dictionary stats & recommendation
-      const { requiredKeys, tier, usedPct } = stats.dictionary;
+      // dictionary stats & recommendation
+      const dict = stats.dictionary || {};
+      const requiredKeys = dict.requiredKeys || 0;
+      const tier = dict.tier || {};
+      const usedPct = dict.usedPct || 0;
+
       el('requiredKeys').textContent = requiredKeys.toLocaleString();
       el('totalMaxKeys').textContent = (tier.max || 0).toLocaleString();
+
       const usedNode = el('usedKeysPercent');
       usedNode.textContent = usedPct.toFixed(2) + '%';
       usedNode.style.color = usedPct >= 90 ? 'red' : usedPct >= 80 ? 'yellow' : 'green';
+
 
       el('keyTierBase').textContent = tier.Base_RAM || 'N/A';
       el('keyTierSize').textContent = tier.Size || 'N/A';
@@ -590,6 +614,19 @@
       ['recKeyTierBase', 'recKeyTierSize', 'recKeyTierAddRAM', 'recKeyTierShift', 'recKeyTierPage'].forEach(id => {
         document.getElementById(id).style.color = recColor;
       });
+
+      // show created/retained counts if you added those spans
+      const setStat = (id, value) => {
+        const node = document.getElementById(id);
+        if (node) node.textContent = value;
+      };
+
+      setStat('statFullCreated', stats.fullsCreated);
+      setStat('statFullRetained', stats.fullsRetained);
+      setStat('statIncrCreated', stats.incrementalsCreated);
+      setStat('statIncrRetained', stats.incrementalsRetained);
+
+
 
       const dictSizeGiB = sizeStrToGiB(recTier.Size);
       const totalAllMetaData = lastBlockMapGiB + finalTotal + dictSizeGiB;
@@ -779,6 +816,8 @@
       const input = readInputs();
       const days = input.simMonths * 30;
       const daysLabels = Array.from({ length: days }, (_, i) => `Day ${i + 1}`);
+      const useIncrementals = document.getElementById('useIncrementals').checked;
+      const fullEveryDays = parseInt(document.getElementById('fullSchedule').value || '30', 10);
 
       const sim = simulateRetention({
         days,
@@ -790,7 +829,10 @@
         monthlyRetention: input.monthlyRetention,
         yearlyRetention: input.yearlyRetention,
         cloudDelay: input.cloudDelay,
-        initialCompression: input.initialCompression
+        initialCompression: input.initialCompression,
+        useIncrementals: input.useIncrementals,
+        fullEveryDays: input.fullEveryDays,
+        uncompressedDataOverTime: input.uncompressedDataOverTime
       });
 
       const {
@@ -803,6 +845,7 @@
         uncompressedLocalOverTime, uncompressedCloudOverTime,
         requiredKeysSeries, dictionarySizesOverTime, tierMetaOverTime,
         dailyRefCounts, dailyRefCountsLocal, dailyRefCountsCloud,
+        uncompressedDataOverTime,
         stats
       } = sim;
 
