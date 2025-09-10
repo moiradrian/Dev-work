@@ -7,7 +7,13 @@ LOG_DIR="/var/log/oca_edit"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 DRY_RUN=false
 SCAN_ONLY=false
+VERIFY_CHECKSUM=false
 MOUNTPOINT=""
+SCAN_FOUND=0
+SCAN_TOTAL_BYTES=0
+SCAN_MAP=""
+grand_human=""
+hb=""
 
 NEW_LINE=""
 REFCNT_OLD="export PLATFORM_DS_REFCNTS_ON_SSD=0"
@@ -35,7 +41,7 @@ capture_system_info() {
         return
     fi
     echo "=== SYSTEM INFO ==="
-    system --show | egrep -i '^(System Name|Current Time|System ID|Product Name|Version|Build|Repository location|Metadata location)'
+    system --show | grep -E -i '^(System Name|Current Time|System ID|Product Name|Version|Build|Repository location|Metadata location)'
     echo
 }
 
@@ -209,7 +215,9 @@ scan_refcnt_sizes() {
     local -A per_dir_bytes=()
     local -i found=0
     local total_bytes=0
-
+    local hb=""
+    local grand_human=""
+    
     shopt -s nullglob
     for d in "$repo"/*; do
         [[ -d "$d" ]] || continue
@@ -286,18 +294,17 @@ check_free_space() {
 
 # ---- Rsync copy + verification (no deletion of sources) ----
 rsync_base_flags() {
-    echo "-aHAX" "--numeric-ids" "--sparse" "-W" "--info=progress2" "--human-readable"
+    # print one flag per line so process-substitution -> read -a builds a proper array
+    printf '%s\n' -aHAX --numeric-ids --sparse -W --info=progress2 --human-readable
 }
 
 rsync_verify_flags() {
-    # start with the same base flags used for copy
-    local base
-    base=($(rsync_base_flags))
+    # start from base
+    mapfile -t base < <(rsync_base_flags)
     if $VERIFY_CHECKSUM; then
-        # --checksum: compare file checksums to detect any differences (slow)
         base+=(--checksum)
     fi
-    printf "%s\n" "${base[@]}"
+    printf '%s\n' "${base[@]}"
 }
 
 copy_one_refcnt() {
@@ -317,7 +324,7 @@ copy_one_refcnt() {
         local out files size_str bytes
         out="$(rsync -n --stats "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1 || true)"
         # Show the two most valuable lines
-        echo "$out" | egrep 'Number of regular files transferred|Total transferred file size' || true
+        echo "$out" | grep -E 'Number of regular files transferred|Total transferred file size' || true
 
         files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
         size_str="$(echo "$out" | awk -F': ' '/Total transferred file size/ {print $2}')"
