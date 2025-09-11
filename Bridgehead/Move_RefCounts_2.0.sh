@@ -186,6 +186,8 @@ parse_args() {
                 echo "Created directory: ${MOUNTPOINT}/ssd"
             fi
         fi
+        # Add a line to the summary output and log
+        SUMMARY+=("✔ Using target SSD directory: ${MOUNTPOINT}/ssd/")
     fi
 }
 
