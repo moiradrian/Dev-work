@@ -128,7 +128,7 @@ human_bytes() {
         }'
 }
 
-# ---- Arg parsing ----
+# ---- Arg parsing (phase 1 only: detect flags, save args) ----
 parse_args() {
     local args=()
     while [[ $# -gt 0 ]]; do
@@ -156,41 +156,48 @@ parse_args() {
         esac
     done
 
-    if ! $SCAN_ONLY; then
-        if [[ ${#args[@]} -gt 0 ]]; then
-            MOUNTPOINT="${args[0]}"
-        else
-            read -rp "Enter the full mount path (e.g. /testmnt or /testmnt/subdir): " MOUNTPOINT
-        fi
+    # Save non-flag args for later
+    PARSED_ARGS=("${args[@]}")
+}
 
-        # Require full path
-        if [[ -z "$MOUNTPOINT" || "${MOUNTPOINT:0:1}" != "/" ]]; then
-            echo "Error: Mountpoint must be a full path starting with '/'." >&2
-            exit 1
-        fi
-
-        # Strip any trailing slash
-        MOUNTPOINT="${MOUNTPOINT%/}"
-
-        # If user included /ssd, strip it off
-        if [[ "$MOUNTPOINT" =~ /ssd$ ]]; then
-            MOUNTPOINT="${MOUNTPOINT%/ssd}"
-        fi
-
-        # Build export line
-        NEW_LINE="export TGTSSDDIR=${MOUNTPOINT}/ssd/"
-
-        # Create ssd dir if missing (only in live mode)
-        if ! $DRY_RUN; then
-            if [[ ! -d "${MOUNTPOINT}/ssd" ]]; then
-                mkdir -p "${MOUNTPOINT}/ssd"
-                echo "Created directory: ${MOUNTPOINT}/ssd"
-            fi
-        fi
-        # Add a line to the summary output and log
-        SUMMARY+=("✔ Using target SSD directory: ${MOUNTPOINT}/ssd/")
-
+# ---- Mountpoint normalization (phase 2: after DRY_RUN is known) ----
+setup_mountpoint() {
+    if $SCAN_ONLY; then
+        return
     fi
+
+    if [[ ${#PARSED_ARGS[@]} -gt 0 ]]; then
+        MOUNTPOINT="${PARSED_ARGS[0]}"
+    else
+        read -rp "Enter the full mount path (e.g. /testmnt or /testmnt/subdir): " MOUNTPOINT
+    fi
+
+    # Require full path
+    if [[ -z "$MOUNTPOINT" || "${MOUNTPOINT:0:1}" != "/" ]]; then
+        echo "Error: Mountpoint must be a full path starting with '/'." >&2
+        exit 1
+    fi
+
+    # Strip any trailing slash
+    MOUNTPOINT="${MOUNTPOINT%/}"
+
+    # If user included /ssd, strip it off
+    if [[ "$MOUNTPOINT" =~ /ssd$ ]]; then
+        MOUNTPOINT="${MOUNTPOINT%/ssd}"
+    fi
+
+    # Build export line
+    NEW_LINE="export TGTSSDDIR=${MOUNTPOINT}/ssd/"
+
+    # Create ssd dir only in LIVE mode
+    if ! $DRY_RUN; then
+        if [[ ! -d "${MOUNTPOINT}/ssd" ]]; then
+            mkdir -p "${MOUNTPOINT}/ssd"
+            echo "Created directory: ${MOUNTPOINT}/ssd"
+        fi
+    fi
+
+    SUMMARY+=("✔ Using target SSD directory: ${MOUNTPOINT}/ssd/")
 }
 
 # ---- Logging ----
@@ -793,9 +800,11 @@ confirm_live_run() {
     fi
 }
 
+# ---- Main ----
 main() {
-    parse_args "$@"
+    parse_args "$@"      # phase 1: detect flags
     setup_logging
+    setup_mountpoint     # phase 2: mountpoint checks (honors DRY_RUN)
 
     if $SCAN_ONLY; then
         echo "=== SCAN-ONLY MODE ==="
@@ -805,7 +814,6 @@ main() {
     fi
 
     if $DRY_RUN; then
-        # scan_refcnt_sizes || true
         copy_all_refcnt || true
         dry_run_preview
         print_summary
@@ -814,7 +822,6 @@ main() {
 
     # LIVE RUN: show everything first, ask user to confirm
     confirm_live_run
-    # Now proceed for real
     copy_all_refcnt || {
         echo "Copy step failed. Aborting before any config changes."
         print_summary
