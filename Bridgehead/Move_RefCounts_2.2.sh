@@ -741,18 +741,22 @@ dry_run_preview() {
         echo "${CYAN}=== END DIFF ===${RESET}"
     }
 
+    local preview_line="$NEW_LINE"
+
     if $DRY_RUN && ! $DRY_HAS_TARGET; then
+        # substitute placeholder if no mountpoint in dry-run
+        preview_line="export TGTSSDDIR=<YOUR_MOUNTPOINT>/ssd/"
         echo
-        echo "[DRY RUN] No target mount available — previewing config changes with placeholder path:"
-        echo "  $NEW_LINE"
+        echo "[DRY RUN] No target mount available — previewing config changes with placeholder:"
+        echo "  $preview_line"
         SUMMARY+=("✔ Config preview with placeholder TGTSSDDIR (target not mounted)")
     fi
 
     echo
     echo "=== DRY-RUN CONFIG PREVIEW ==="
     echo "[DRY RUN] Would insert after 'export TGTDIR':"
-    echo "  $NEW_LINE"
-    SUMMARY+=("✔ Would insert: $NEW_LINE")
+    echo "  $preview_line"
+    SUMMARY+=("✔ Would insert: $preview_line")
 
     if grep -q "^$REFCNT_OLD" "$CONFIG_FILE"; then
         echo
@@ -764,9 +768,10 @@ dry_run_preview() {
         echo "[DRY RUN] No PLATFORM_DS_REFCNTS_ON_SSD=0 line found, no change made there."
         SUMMARY+=("✘ No PLATFORM_DS_REFCNTS_ON_SSD=0 found")
     fi
+
     echo
     echo "[DRY RUN] Preview of changes:"
-    awk -v newline="$NEW_LINE" -v old="$REFCNT_OLD" -v new="$REFCNT_NEW" '
+    awk -v newline="$preview_line" -v old="$REFCNT_OLD" -v new="$REFCNT_NEW" '
         BEGIN { done_insert=0 }
         /^export TGTDIR/ && !done_insert {
             print
@@ -776,18 +781,9 @@ dry_run_preview() {
         }
         $0 == old { print new; next }
         { print }
-    ' "$CONFIG_FILE" \
-        >"${CONFIG_FILE}.dryrun.tmp"
+    ' "$CONFIG_FILE" >"${CONFIG_FILE}.dryrun.tmp"
     show_diff "$CONFIG_FILE" "${CONFIG_FILE}.dryrun.tmp"
     rm -f "${CONFIG_FILE}.dryrun.tmp"
-}
-
-make_backup() {
-    BACKUP_FILE="${BACKUP_DIR}/oca.cfg.refcount_script.bak_${TIMESTAMP}"
-    cp -p "$CONFIG_FILE" "$BACKUP_FILE"
-    echo "Backup created at: $BACKUP_FILE"
-    SUMMARY+=("✔ Backup created: $BACKUP_FILE")
-    echo
 }
 
 apply_changes() {
