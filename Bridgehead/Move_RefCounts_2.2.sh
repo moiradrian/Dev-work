@@ -147,6 +147,19 @@ human_bytes() {
         }'
 }
 
+run_with_bar() {
+    local cmd=("$@")
+    "${cmd[@]}" 2>&1 | while IFS= read -r line; do
+        if [[ "$line" =~ ([0-9]+)% ]]; then
+            local pct="${BASH_REMATCH[1]}"
+            local bar_len=$((pct / 2)) # 50 chars = 100%
+            local bar=$(printf "%0.s#" $(seq 1 $bar_len))
+            printf "\r[%-50s] %3d%%" "$bar" "$pct"
+        fi
+    done
+    echo
+}
+
 # ---- Arg parsing (phase 1 only: detect flags, save args) ----
 parse_args() {
     local args=()
@@ -437,7 +450,7 @@ copy_one_refcnt() {
     echo "[LIVE] rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
 
     local out files
-    if out="$(safe_rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1)"; then
+    if out="$(run_with_bar safe_rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/")"; then
         files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
         : "${files:=0}"
         printf "Directory %s: %'d files copied\n" "$base" "$files"
@@ -449,6 +462,7 @@ copy_one_refcnt() {
         echo "$out"
         return 1
     fi
+
 }
 
 verify_one_refcnt() {
