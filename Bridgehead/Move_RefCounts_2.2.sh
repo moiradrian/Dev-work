@@ -912,6 +912,8 @@ confirm_live_run() {
     fi
     echo
 
+    scan_refcnt_sizes || true
+
     # Only show planned totals (don’t rescan)
     local planned_files
     planned_files="$(plan_copy_totals)"
