@@ -188,6 +188,7 @@ parse_args() {
         fi
         # Add a line to the summary output and log
         SUMMARY+=("✔ Using target SSD directory: ${MOUNTPOINT}/ssd/")
+
     fi
 }
 
@@ -499,6 +500,35 @@ verify_all_refcnt() {
 
 # ---- Edit-mode (unchanged behavior) ----
 dry_run_preview() {
+    # ---- Diff helper (only changes, clean wrapping, colorized for console) ----
+    show_diff() {
+        local file1="$1" file2="$2"
+        local width="${3:-160}"
+
+        # Detect if stdout is a terminal → enable colors
+        local RED="" GREEN="" CYAN="" RESET=""
+        if [[ -t 1 ]]; then
+            RED=$'\033[31m'
+            GREEN=$'\033[32m'
+            CYAN=$'\033[36m'
+            RESET=$'\033[0m'
+        fi
+
+        echo "${CYAN}=== CONFIG DIFF ($file1 vs $file2) ===${RESET}"
+        diff -u "$file1" "$file2" |
+            grep -E '^[+-]' |
+            grep -Ev '^(\+\+\+|---)' |
+            fold -w "$width" -s |
+            while IFS= read -r line; do
+                case "$line" in
+                +*) echo "${GREEN}${line}${RESET}" ;;
+                -*) echo "${RED}${line}${RESET}" ;;
+                *) echo "$line" ;;
+                esac
+            done
+        echo "${CYAN}=== END DIFF ===${RESET}"
+    }
+
     echo "[DRY RUN] Would insert after 'export TGTDIR':"
     echo "  $NEW_LINE"
     SUMMARY+=("✔ Would insert: $NEW_LINE")
@@ -524,7 +554,10 @@ dry_run_preview() {
         }
         $0 == old { print new; next }
         { print }
-    ' "$CONFIG_FILE" | diff -u "$CONFIG_FILE" - || true
+    ' "$CONFIG_FILE" \
+        >"${CONFIG_FILE}.dryrun.tmp"
+    show_diff "$CONFIG_FILE" "${CONFIG_FILE}.dryrun.tmp"
+    rm -f "${CONFIG_FILE}.dryrun.tmp"
 }
 
 make_backup() {
@@ -536,6 +569,35 @@ make_backup() {
 }
 
 apply_changes() {
+    # ---- Diff helper (only changes, clean wrapping, colorized for console) ----
+    show_diff() {
+        local file1="$1" file2="$2"
+        local width="${3:-160}"
+
+        # Detect if stdout is a terminal → enable colors
+        local RED="" GREEN="" CYAN="" RESET=""
+        if [[ -t 1 ]]; then
+            RED=$'\033[31m'
+            GREEN=$'\033[32m'
+            CYAN=$'\033[36m'
+            RESET=$'\033[0m'
+        fi
+
+        echo "${CYAN}=== CONFIG DIFF ($file1 vs $file2) ===${RESET}"
+        diff -u "$file1" "$file2" |
+            grep -E '^[+-]' |
+            grep -Ev '^(\+\+\+|---)' |
+            fold -w "$width" -s |
+            while IFS= read -r line; do
+                case "$line" in
+                +*) echo "${GREEN}${line}${RESET}" ;;
+                -*) echo "${RED}${line}${RESET}" ;;
+                *) echo "$line" ;;
+                esac
+            done
+        echo "${CYAN}=== END DIFF ===${RESET}"
+    }
+
     awk -v newline="$NEW_LINE" -v old="$REFCNT_OLD" -v new="$REFCNT_NEW" '
         BEGIN { done_insert=0 }
         /^export TGTDIR/ && !done_insert {
@@ -564,7 +626,7 @@ apply_changes() {
 
     echo
     echo "Changes made (compared to backup):"
-    diff -u "$BACKUP_FILE" "$CONFIG_FILE" || true
+    show_diff "$BACKUP_FILE" "$CONFIG_FILE"
 }
 
 print_summary() {
