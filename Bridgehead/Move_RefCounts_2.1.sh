@@ -358,11 +358,12 @@ copy_one_refcnt() {
     RSYNC_ARGS+=(--stats)
 
     if $DRY_RUN; then
-        # Log rsync command ONLY to log file
-        echo "[DRY RUN] rsync -n ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
+        # add -n explicitly for dry-run
+        RSYNC_ARGS+=(-n)
+        echo "[DRY RUN] rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
 
         local out files
-        out="$(rsync -n "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1 || true)"
+        out="$(rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1 || true)"
         files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
         : "${files:=0}"
 
@@ -397,15 +398,20 @@ verify_one_refcnt() {
     local -a RSYNC_ARGS
     IFS=$'\n' read -r -d '' -a RSYNC_ARGS < <(rsync_verify_flags && printf '\0')
 
-    local out rc
+    local out rc files
 
     if $DRY_RUN; then
-        # Log rsync command ONLY to log file (with -n)
-        echo "[DRY RUN] verify rsync -n ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
+        # add -n explicitly for dry-run
+        RSYNC_ARGS+=(-n --stats)
+        echo "[DRY RUN] verify rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
 
-        # In dry-run verify, we just note it would be compared
-        echo "[DRY RUN] Verify: would compare $SRC -> $DST"
-        SUMMARY+=("Would verify: $SRC -> $DST")
+        # Run rsync in dry-run mode to get stats only
+        out="$(rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1 || true)"
+        files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
+        : "${files:=0}"
+
+        printf "[DRY RUN] Verify %s: %'d files would be compared\n" "$SRC" "$files"
+        SUMMARY+=("Would verify $SRC: $files files")
         return 0
     fi
 
@@ -525,6 +531,7 @@ verify_all_refcnt() {
 
     shopt -s nullglob
     local verified=0
+    local total_verified_files=0
     for d in "$repo"/*; do
         [[ -d "$d" ]] || continue
         local base="$(basename -- "$d")"
@@ -534,18 +541,52 @@ verify_all_refcnt() {
         local DST="$target_base/$base/.ocarina_hidden/refcnt"
 
         if $DRY_RUN; then
-            echo "[DRY RUN] Verify: would compare $SRC -> $DST"
+            # Dry-run: simulate comparison, parse stats
+            local out files
+            out="$(rsync -n --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1 || true)"
+            files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
+            : "${files:=0}"
+
+            printf "[DRY RUN] Verify Directory %s: %'d files would be compared\n" "$base" "$files"
+            SUMMARY+=("Would verify dir $base: $files files")
+            total_verified_files=$((total_verified_files + files))
             ((verified++))
             continue
         fi
-        verify_one_refcnt "$SRC" "$DST" || {
+
+        # Live mode: actually compare
+        local out files rc
+        set +e
+        out="$(rsync -n --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1)"
+        rc=$?
+        set -e
+
+        if [[ $rc -ne 0 ]]; then
+            echo "Verification rsync reported errors for: $SRC -> $DST"
+            echo "$out"
             SUMMARY+=("✘ Verify failed: $base")
             return 1
-        }
+        fi
+
+        files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
+        : "${files:=0}"
+
+        printf "Verify Directory %s: %'d files compared OK\n" "$base" "$files"
+        SUMMARY+=("Directory $base: $files files verified")
+        total_verified_files=$((total_verified_files + files))
         ((verified++))
     done
     shopt -u nullglob
-    SUMMARY+=("✔ Verify OK for $verified trees")
+
+    echo
+    if $DRY_RUN; then
+        echo "Total files that would be compared: $(printf "%'d" "$total_verified_files")"
+        SUMMARY+=("Total files that would be compared: $(printf "%'d" "$total_verified_files")")
+    else
+        echo "Total files verified: $(printf "%'d" "$total_verified_files")"
+        SUMMARY+=("✔ Verify OK for $verified trees, $total_verified_files files")
+    fi
+
     return 0
 }
 
