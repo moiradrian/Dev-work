@@ -244,6 +244,23 @@ plan_copy_totals() {
 
     echo "$total_files"
 }
+safe_rsync() {
+    # usage: safe_rsync <args...>
+    # If DRY_RUN=true, require that -n (or --dry-run) is present in args.
+    local want_dry="$DRY_RUN"
+    local have_dry="false"
+    for a in "$@"; do
+        if [[ "$a" == "-n" || "$a" == "--dry-run" ]]; then
+            have_dry="true"
+            break
+        fi
+    done
+    if $want_dry && ! $have_dry; then
+        echo "FATAL: rsync invoked without -n in dry-run mode. Aborting." >&2
+        return 99
+    fi
+    rsync "$@"
+}
 
 # ---- Scan-only (also reused for sizing) ----
 scan_refcnt_sizes() {
@@ -346,24 +363,30 @@ rsync_verify_flags() {
 
 copy_one_refcnt() {
     local SRC="$1" DST="$2" base="$3"
+
     if [[ ! -d "$SRC" ]]; then
         echo "Note: Missing $SRC (skipped)"
         SUMMARY+=("✘ Skip (missing): $SRC")
         return 0
     fi
-    mkdir -p "$DST"
+
+    # Only create destination in LIVE mode
+    if ! $DRY_RUN; then
+        mkdir -p "$DST"
+    fi
 
     local -a RSYNC_ARGS
     IFS=$'\n' read -r -d '' -a RSYNC_ARGS < <(rsync_base_flags && printf '\0')
     RSYNC_ARGS+=(--stats)
 
     if $DRY_RUN; then
-        # add -n explicitly for dry-run
+        # add -n explicitly
         RSYNC_ARGS+=(-n)
         echo "[DRY RUN] rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
 
         local out files
-        out="$(rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1 || true)"
+        # Use safety wrapper
+        out="$(safe_rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1 || true)"
         files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
         : "${files:=0}"
 
@@ -379,7 +402,7 @@ copy_one_refcnt() {
     echo "[LIVE] rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
 
     local out files
-    if out="$(rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1)"; then
+    if out="$(safe_rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1)"; then
         files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
         : "${files:=0}"
         printf "Directory %s: %'d files copied\n" "$base" "$files"
@@ -543,7 +566,7 @@ verify_all_refcnt() {
         if $DRY_RUN; then
             # Dry-run: simulate comparison, parse stats
             local out files
-            out="$(rsync -n --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1 || true)"
+            out="$(safe_rsync -n --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1 || true)"
             files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
             : "${files:=0}"
 
@@ -557,7 +580,7 @@ verify_all_refcnt() {
         # Live mode: actually compare
         local out files rc
         set +e
-        out="$(rsync -n --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1)"
+        out="$(safe_rsync -n --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1)"
         rc=$?
         set -e
 
