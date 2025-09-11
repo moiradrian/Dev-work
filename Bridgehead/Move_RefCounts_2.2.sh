@@ -823,7 +823,6 @@ apply_changes() {
         local file1="$1" file2="$2"
         local width="${3:-160}"
 
-        # Detect if stdout is a terminal → enable colors
         local RED="" GREEN="" CYAN="" RESET=""
         if [[ -t 1 ]]; then
             RED=$'\033[31m'
@@ -847,30 +846,44 @@ apply_changes() {
         echo "${CYAN}=== END DIFF ===${RESET}"
     }
 
+    # Build a temp file with proposed changes
     awk -v newline="$NEW_LINE" -v old="$REFCNT_OLD" -v new="$REFCNT_NEW" '
-        BEGIN { done_insert=0 }
+        BEGIN { done_insert=0; changed_refcnt=0 }
         /^export TGTDIR/ && !done_insert {
             print
             print newline
             done_insert=1
             next
         }
-        $0 == old { print new; changed_refcnt=1; next }
+        $0 == old {
+            print new
+            changed_refcnt=1
+            next
+        }
         { print }
+        END {
+            if (!done_insert) print newline
+            if (!changed_refcnt) print new
+        }
     ' "$CONFIG_FILE" >"${CONFIG_FILE}.tmp"
 
+    # Compare old vs new before replacing
+    if cmp -s "$CONFIG_FILE" "${CONFIG_FILE}.tmp"; then
+        echo "✔ Config already up-to-date. No changes made."
+        SUMMARY+=("✔ Config already up-to-date (no changes required)")
+        rm -f "${CONFIG_FILE}.tmp"
+        return 0
+    fi
+
+    # Replace config with updated version
     mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
 
-    echo "Line inserted:"
-    echo "  $NEW_LINE"
-    SUMMARY+=("✔ Inserted: $NEW_LINE")
+    echo "✔ Config updated."
+    SUMMARY+=("✔ Config updated: $CONFIG_FILE")
 
     if grep -q "^$REFCNT_NEW" "$CONFIG_FILE"; then
-        echo "Updated: $REFCNT_OLD → $REFCNT_NEW"
+        echo "✔ Updated: $REFCNT_OLD → $REFCNT_NEW"
         SUMMARY+=("✔ Updated: $REFCNT_OLD → $REFCNT_NEW")
-    else
-        echo "No PLATFORM_DS_REFCNTS_ON_SSD=0 line found, nothing changed there."
-        SUMMARY+=("✘ No PLATFORM_DS_REFCNTS_ON_SSD=0 found")
     fi
 
     echo
