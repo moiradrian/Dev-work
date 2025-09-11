@@ -523,14 +523,27 @@ copy_all_refcnt() {
     shopt -u nullglob
 
     echo
-    echo "Total files copied: $(printf "%'d" "$COPIED_FILES")"
-    SUMMARY+=("Total files copied: $(printf "%'d" "$COPIED_FILES")")
+    if $DRY_RUN; then
+        echo "Total files that would be copied: $(printf "%'d" "$COPIED_FILES")"
+        SUMMARY+=("Total files that would be copied: $(printf "%'d" "$COPIED_FILES")")
+    else
+        echo "Total files copied: $(printf "%'d" "$COPIED_FILES")"
+        SUMMARY+=("Total files copied: $(printf "%'d" "$COPIED_FILES")")
+    fi
 
     if [[ -n "$planned_files" && "$COPIED_FILES" -ne "$planned_files" ]]; then
-        echo "WARNING: Planned file count ($planned_files) does not match actual copied ($COPIED_FILES)"
+        if $DRY_RUN; then
+            echo "WARNING: Planned file count ($planned_files) does not match actual would-be copied ($COPIED_FILES)"
+        else
+            echo "WARNING: Planned file count ($planned_files) does not match actual copied ($COPIED_FILES)"
+        fi
         SUMMARY+=("✘ File count mismatch: planned $(printf "%'d" "$planned_files") vs actual $(printf "%'d" "$COPIED_FILES")")
     else
-        SUMMARY+=("✔ File count match: $(printf "%'d" "$COPIED_FILES")")
+        if $DRY_RUN; then
+            SUMMARY+=("✔ File count match (dry-run): $(printf "%'d" "$COPIED_FILES")")
+        else
+            SUMMARY+=("✔ File count match: $(printf "%'d" "$COPIED_FILES")")
+        fi
     fi
 
     SUMMARY+=("✔ Refcnt trees processed: $processed")
@@ -571,9 +584,8 @@ verify_all_refcnt() {
         local DST="$target_base/$base/.ocarina_hidden/refcnt"
 
         if $DRY_RUN; then
-            # Dry-run: simulate comparison, parse stats
             local out files
-            out="$(safe_rsync -n --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1 || true)"
+            out="$(rsync -n --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1 || true)"
             files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
             : "${files:=0}"
 
@@ -584,10 +596,10 @@ verify_all_refcnt() {
             continue
         fi
 
-        # Live mode: actually compare
+        # Live mode
         local out files rc
         set +e
-        out="$(safe_rsync -n --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1)"
+        out="$(rsync -n --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1)"
         rc=$?
         set -e
 
@@ -802,9 +814,9 @@ confirm_live_run() {
 
 # ---- Main ----
 main() {
-    parse_args "$@"      # phase 1: detect flags
+    parse_args "$@" # phase 1: detect flags
     setup_logging
-    setup_mountpoint     # phase 2: mountpoint checks (honors DRY_RUN)
+    setup_mountpoint # phase 2: mountpoint checks (honors DRY_RUN)
 
     if $SCAN_ONLY; then
         echo "=== SCAN-ONLY MODE ==="
