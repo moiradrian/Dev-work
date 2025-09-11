@@ -159,13 +159,33 @@ parse_args() {
         if [[ ${#args[@]} -gt 0 ]]; then
             MOUNTPOINT="${args[0]}"
         else
-            read -rp "Enter the mountpoint name: " MOUNTPOINT
+            read -rp "Enter the full mount path (e.g. /testmnt or /testmnt/subdir): " MOUNTPOINT
         fi
-        if [[ -z "$MOUNTPOINT" ]]; then
-            echo "Error: Mountpoint cannot be empty (edit mode)." >&2
+
+        # Require full path
+        if [[ -z "$MOUNTPOINT" || "${MOUNTPOINT:0:1}" != "/" ]]; then
+            echo "Error: Mountpoint must be a full path starting with '/'." >&2
             exit 1
         fi
-        NEW_LINE="export TGTSSDDIR=/${MOUNTPOINT}/ssd/"
+
+        # Strip any trailing slash
+        MOUNTPOINT="${MOUNTPOINT%/}"
+
+        # If user included /ssd, strip it off
+        if [[ "$MOUNTPOINT" =~ /ssd$ ]]; then
+            MOUNTPOINT="${MOUNTPOINT%/ssd}"
+        fi
+
+        # Build export line
+        NEW_LINE="export TGTSSDDIR=${MOUNTPOINT}/ssd/"
+
+        # Create ssd dir if missing (only in live mode)
+        if ! $DRY_RUN; then
+            if [[ ! -d "${MOUNTPOINT}/ssd" ]]; then
+                mkdir -p "${MOUNTPOINT}/ssd"
+                echo "Created directory: ${MOUNTPOINT}/ssd"
+            fi
+        fi
     fi
 }
 
@@ -217,7 +237,7 @@ scan_refcnt_sizes() {
     local total_bytes=0
     local hb=""
     local grand_human=""
-    
+
     shopt -s nullglob
     for d in "$repo"/*; do
         [[ -d "$d" ]] || continue
