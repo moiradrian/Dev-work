@@ -425,15 +425,13 @@ copy_one_refcnt() {
 
     local -a RSYNC_ARGS
     IFS=$'\n' read -r -d '' -a RSYNC_ARGS < <(rsync_base_flags && printf '\0')
-    RSYNC_ARGS+=(--stats)
+    RSYNC_ARGS+=(--stats --info=progress2)
 
     if $DRY_RUN; then
-        # add -n explicitly
         RSYNC_ARGS+=(-n)
         echo "[DRY RUN] rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
 
         local out files
-        # Use safety wrapper
         out="$(safe_rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1 || true)"
         files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
         : "${files:=0}"
@@ -446,10 +444,7 @@ copy_one_refcnt() {
         return 0
     fi
 
-    # LIVE RUN
-    RSYNC_ARGS=("${RSYNC_ARGS[@]/--info=progress2/}") # strip progress2 if present
-    RSYNC_ARGS+=(--info=stats2)
-
+    # --- LIVE RUN ---
     echo "[LIVE] rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
 
     local tmpfile
@@ -469,7 +464,6 @@ copy_one_refcnt() {
         rm -f "$tmpfile"
         return 1
     fi
-
 }
 
 verify_one_refcnt() {
@@ -696,10 +690,10 @@ verify_all_refcnt() {
             continue
         fi
 
-        # Live mode
+        # --- LIVE RUN ---
         local out files rc
         set +e
-        out="$(rsync -n --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1)"
+        out="$(rsync --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1)"
         rc=$?
         set -e
 
@@ -731,6 +725,7 @@ verify_all_refcnt() {
 
     return 0
 }
+
 config_preview_live() {
     echo
     echo "=== LIVE CONFIG PREVIEW ==="
@@ -958,7 +953,6 @@ confirm_live_run() {
     echo "=== RUN PREVIEW: LIVE RUN ==="
     echo
 
-    # Mode + options (consistent with DRY-RUN preview)
     echo "✔ MODE: LIVE"
     if $VERIFY_CHECKSUM; then
         echo "✔ Checksum verification enabled"
@@ -973,11 +967,12 @@ confirm_live_run() {
     fi
     echo
 
-    # Show scan results
+    # Just scan + plan totals (no rsync copy)
     scan_refcnt_sizes || true
-
-    # Show copy plan with rsync -n stats
-    copy_all_refcnt || true
+    local planned_files
+    planned_files="$(plan_copy_totals)"
+    echo "Planned total files to copy: $(printf "%'d" "$planned_files")"
+    SUMMARY+=("Planned total files to copy (preview): $(printf "%'d" "$planned_files")")
 
     # Show config changes
     config_preview_live
