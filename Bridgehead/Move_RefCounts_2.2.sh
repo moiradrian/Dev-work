@@ -805,6 +805,18 @@ dry_run_preview() {
     rm -f "${CONFIG_FILE}.dryrun.tmp"
 }
 
+make_backup() {
+    BACKUP_FILE="${BACKUP_DIR}/oca.cfg.refcount_script.bak_${TIMESTAMP}"
+    cp -p "$CONFIG_FILE" "$BACKUP_FILE"
+
+    echo "=== BACKUP CREATED ==="
+    echo "Backup created at: $BACKUP_FILE"
+    echo "======================"
+
+    SUMMARY+=("✔ Backup created: $BACKUP_FILE")
+    echo
+}
+
 apply_changes() {
     # ---- Diff helper (only changes, clean wrapping, colorized for console) ----
     show_diff() {
@@ -1003,6 +1015,16 @@ main() {
     # LIVE RUN
     setup_mountpoint # LIVE always requires a mountpoint
     confirm_live_run
+
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        echo "Error: Config file $CONFIG_FILE not found!"
+        print_summary
+        exit 1
+    fi
+
+    # Always back up before doing anything else
+    make_backup
+
     copy_all_refcnt || {
         echo "Copy step failed. Aborting before any config changes."
         print_summary
@@ -1014,13 +1036,6 @@ main() {
         exit 1
     }
 
-    if [[ ! -f "$CONFIG_FILE" ]]; then
-        echo "Error: Config file $CONFIG_FILE not found!"
-        print_summary
-        exit 1
-    fi
-
-    make_backup
     apply_changes
     print_summary
 }
