@@ -232,62 +232,54 @@ scan_refcnt_sizes() {
     }
 
     echo "Scanning refcount data under: $repo"
-    echo "Matching integer directories and summing '.ocarina_hidden/refcnt' recursively"
+    echo "Looking for integer dirs with '.ocarina_hidden/refcnt'"
     echo
 
-    local -A per_dir_bytes=()
     local -i found=0
     local total_bytes=0
-    local hb=""
-    local grand_human=""
 
     shopt -s nullglob
     for d in "$repo"/*; do
         [[ -d "$d" ]] || continue
-        local base="$(basename -- "$d")"
+        local base
+        base="$(basename -- "$d")"
         [[ "$base" =~ ^[0-9]+$ ]] || continue
         ((found++))
+
         local refdir="$d/.ocarina_hidden/refcnt"
         local bytes=0
         if [[ -d "$refdir" ]]; then
-            if du -sb "$refdir" >/dev/null 2>&1; then
-                bytes="$(du -sb "$refdir" 2>/dev/null | awk '{print $1}')"
-            else
-                bytes="$(find "$refdir" -type f -printf '%s\n' 2>/dev/null | awk '{s+=$1} END{print s+0}')"
-            fi
+            bytes="$(du -sb "$refdir" 2>/dev/null | awk '{print $1}')"
+            bytes="${bytes:-0}"
         else
-            echo "Note: Missing refcount path for $base -> $refdir (counted as 0)."
+            echo "Note: Missing refcount path for $base -> $refdir"
         fi
-        per_dir_bytes["$base"]="$bytes"
+
         total_bytes=$((total_bytes + bytes))
+
+        local hb
+        hb=$(human_bytes "$bytes")
+        printf "Directory %s: %s\n" "$base" "$hb"
     done
     shopt -u nullglob
 
     if ((found == 0)); then
-        echo "No integer-named directories found under $repo."
+        echo "No integer-named directories with refcnt found under $repo."
         SUMMARY+=("✘ Scan: 0 integer dirs found under $repo")
         return 0
     fi
 
-    echo "=== Refcount Sizes by Directory ==="
-    for key in $(printf "%s\n" "${!per_dir_bytes[@]}" | sort -n); do
-        hb=$(human_bytes "${per_dir_bytes[$key]}")
-        printf "Directory %s: %s\n" "$key" "$hb"
-    done
     echo
-
+    local grand_human
     grand_human=$(human_bytes "$total_bytes")
     echo "Total Refcount Size: $grand_human"
     echo
 
-    SUMMARY+=("✔ Scan: $found integer dirs")
+    SUMMARY+=("✔ Scan: $found integer dirs under $repo")
     SUMMARY+=("✔ Total Refcount Size: $grand_human")
 
-    # Export totals for callers
     SCAN_FOUND="$found"
     SCAN_TOTAL_BYTES="$total_bytes"
-    # Serialize map for reuse (key=bytes)
-    SCAN_MAP=$(for k in "${!per_dir_bytes[@]}"; do printf "%s=%s\n" "$k" "${per_dir_bytes[$k]}"; done | sort -n)
     return 0
 }
 
