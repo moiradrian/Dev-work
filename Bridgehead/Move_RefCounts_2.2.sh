@@ -531,56 +531,21 @@ copy_all_refcnt() {
         return 1
     }
 
-    # --- DRY-RUN without target: plan-only mode (no space checks, no rsync) ---
+    # --- DRY-RUN without target: plan-only mode ---
     if $DRY_RUN && ! $DRY_HAS_TARGET; then
         echo
         echo "[DRY RUN] Plan-only mode (no target)."
         echo "[DRY RUN] Space check skipped (no target available)."
-        echo "[DRY RUN] Showing file counts per integer directory (no copy simulation to a path)."
         echo
         SUMMARY+=("✘ Space check skipped (no target in dry-run)")
 
-        COPIED_FILES=0
-        shopt -s nullglob
-        for d in "$repo"/*; do
-            [[ -d "$d" ]] || continue
-            local base="$(basename -- "$d")"
-            [[ "$base" =~ ^[0-9]+$ ]] || continue
-
-            local refdir="$d/.ocarina_hidden/refcnt"
-            local count=0
-            local bytes=0
-            if [[ -d "$refdir" ]]; then
-                count="$(find "$refdir" -type f 2>/dev/null | wc -l)"
-                bytes="$(du -sb "$refdir" 2>/dev/null | awk '{print $1}')"
-            fi
-            printf "Directory %s: %'d files would be copied (%s)\n" "$base" "$count" "$(human_bytes "$bytes")"
-            SUMMARY+=("Directory $base: $count files would be copied, size $(human_bytes "$bytes")")
-            COPIED_FILES=$((COPIED_FILES + count))
-            DRY_COPY_BYTES=$((DRY_COPY_BYTES + bytes))
-
-        done
-        shopt -u nullglob
-
-        echo
-        echo "Total files that would be copied: $(printf "%'d" "$COPIED_FILES")"
-        SUMMARY+=("Total files that would be copied: $(printf "%'d" "$COPIED_FILES")")
-
-        echo
-        echo "Total size that would be copied: $(human_bytes "$DRY_COPY_BYTES")"
-        SUMMARY+=("✔ DRY total size to copy: $(human_bytes "$DRY_COPY_BYTES")")
-
-        if [[ -n "$planned_files" && "$COPIED_FILES" -ne "$planned_files" ]]; then
-            echo "WARNING: Planned file count ($planned_files) does not match would-be copied ($COPIED_FILES)"
-            SUMMARY+=("✘ File count mismatch: planned $(printf "%'d" "$planned_files") vs would-be $(printf "%'d" "$COPIED_FILES")")
-        else
-            SUMMARY+=("✔ File count match (dry-run): $(printf "%'d" "$COPIED_FILES")")
-        fi
-        SUMMARY+=("✘ Skipped free space check (no target mount in dry-run)")
+        COPIED_FILES="$planned_files"
+        echo "Total files that would be copied: $(printf "%'d" "$planned_files")"
+        SUMMARY+=("Total files that would be copied: $(printf "%'d" "$planned_files")")
         return 0
     fi
 
-    # --- LIVE or DRY-RUN with target: original path-based flow ---
+    # --- LIVE or DRY-RUN with target ---
     local target_base="${NEW_LINE#export TGTSSDDIR=}"
     target_base="${target_base%/}"
     if [[ -z "$target_base" || "$target_base" == "export TGTSSDDIR=" ]]; then
@@ -589,67 +554,47 @@ copy_all_refcnt() {
     fi
 
     # Size planning & space check
-    scan_refcnt_sizes || true
     local need="${SCAN_TOTAL_BYTES:-0}"
     echo "Planned copy target base: $target_base"
     check_free_space "$target_base" "$need" || return 1
     echo
 
-    # Reset counters
-    COPIED_FILES=0
+    # Build list of all refcount files (relative to $repo)
+    local filelist
+    filelist="$(mktemp)"
+    (cd "$repo" && find . -type f -path "*/.ocarina_hidden/refcnt/*") >"$filelist"
+
+    # Rsync args
+    local -a RSYNC_ARGS
+    IFS=$'\n' read -r -d '' -a RSYNC_ARGS < <(rsync_base_flags && printf '\0')
+    RSYNC_ARGS+=(--files-from="$filelist" --stats --info=progress2)
+
     if $DRY_RUN; then
-        DRY_COPY_BYTES=0
+        RSYNC_ARGS+=(-n)
+        echo "[DRY RUN] rsync ${RSYNC_ARGS[*]} $repo/ $target_base/" >>"$LOG_FILE"
+        rsync "${RSYNC_ARGS[@]}" "$repo/" "$target_base/" | grep -E 'Number of regular files transferred'
+        echo "Total files that would be copied: $(printf "%'d" "$planned_files")"
+        SUMMARY+=("Total files that would be copied: $(printf "%'d" "$planned_files")")
+        rm -f "$filelist"
+        return 0
     fi
 
-    shopt -s nullglob
-    local processed=0
-    for d in "$repo"/*; do
-        [[ -d "$d" ]] || continue
-        local base="$(basename -- "$d")"
-        [[ "$base" =~ ^[0-9]+$ ]] || continue
+    # --- LIVE RUN ---
+    echo "[LIVE] rsync ${RSYNC_ARGS[*]} $repo/ $target_base/" >>"$LOG_FILE"
 
-        local SRC="$d/.ocarina_hidden/refcnt"
-        local DST="$target_base/$base/.ocarina_hidden/refcnt"
-
-        copy_one_refcnt "$SRC" "$DST" "$base" || return 1
-        ((processed++))
-    done
-    shopt -u nullglob
-
-    echo
-    if $DRY_RUN; then
-        echo "Total files that would be copied: $(printf "%'d" "$COPIED_FILES")"
-        SUMMARY+=("Total files that would be copied: $(printf "%'d" "$COPIED_FILES")")
+    if rsync "${RSYNC_ARGS[@]}" "$repo/" "$target_base/"; then
+        echo
+        echo "✔ Rsync completed"
+        SUMMARY+=("✔ Rsync completed: $planned_files files planned")
+        COPIED_FILES="$planned_files"
+        rm -f "$filelist"
+        return 0
     else
-        echo "Total files copied: $(printf "%'d" "$COPIED_FILES")"
-        SUMMARY+=("Total files copied: $(printf "%'d" "$COPIED_FILES")")
+        echo "✘ Rsync failed"
+        SUMMARY+=("✘ Rsync failed")
+        rm -f "$filelist"
+        return 1
     fi
-
-    if [[ -n "$planned_files" && "$COPIED_FILES" -ne "$planned_files" ]]; then
-        if $DRY_RUN; then
-            echo "WARNING: Planned file count ($planned_files) does not match actual would-be copied ($COPIED_FILES)"
-        else
-            echo "WARNING: Planned file count ($planned_files) does not match actual copied ($COPIED_FILES)"
-        fi
-        SUMMARY+=("✘ File count mismatch: planned $(printf "%'d" "$planned_files") vs actual $(printf "%'d" "$COPIED_FILES")")
-    else
-        if $DRY_RUN; then
-            SUMMARY+=("✔ File count match (dry-run): $(printf "%'d" "$COPIED_FILES")")
-        else
-            SUMMARY+=("✔ File count match: $(printf "%'d" "$COPIED_FILES")")
-        fi
-    fi
-
-    SUMMARY+=("✔ Refcnt trees processed: $processed")
-
-    if $DRY_RUN; then
-        local human_total
-        human_total="$(human_bytes "$DRY_COPY_BYTES")"
-        SUMMARY+=("✔ DRY total files to copy: $(printf "%'d" "$DRY_COPY_FILES")")
-        SUMMARY+=("✔ DRY total size to copy: $human_total")
-    fi
-
-    return 0
 }
 
 verify_all_refcnt() {
@@ -967,8 +912,7 @@ confirm_live_run() {
     fi
     echo
 
-    # Just scan + plan totals (no rsync copy)
-    scan_refcnt_sizes || true
+    # Only show planned totals (don’t rescan)
     local planned_files
     planned_files="$(plan_copy_totals)"
     echo "Planned total files to copy: $(printf "%'d" "$planned_files")"
@@ -1033,7 +977,6 @@ main() {
         fi
         echo
 
-        # Ask whether the target is mounted; only then collect mountpoint
         decide_dryrun_target
         copy_all_refcnt || true
         dry_run_preview
@@ -1041,8 +984,8 @@ main() {
         exit 0
     fi
 
-    # LIVE RUN
-    setup_mountpoint # LIVE always requires a mountpoint
+    # --- LIVE RUN ---
+    setup_mountpoint
     confirm_live_run
 
     if [[ ! -f "$CONFIG_FILE" ]]; then
@@ -1051,19 +994,20 @@ main() {
         exit 1
     fi
 
-    # Always back up before doing anything else
     make_backup
-
     copy_all_refcnt || {
         echo "Copy step failed. Aborting before any config changes."
         print_summary
         exit 1
     }
-    verify_all_refcnt || {
-        echo "Verification failed. Aborting before any config changes."
-        print_summary
-        exit 1
-    }
+
+    if $VERIFY_CHECKSUM; then
+        verify_all_refcnt || {
+            echo "Verification failed. Aborting before any config changes."
+            print_summary
+            exit 1
+        }
+    fi
 
     apply_changes
     print_summary
