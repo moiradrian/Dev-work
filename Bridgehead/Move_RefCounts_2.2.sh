@@ -459,11 +459,9 @@ verify_one_refcnt() {
     local out rc files
 
     if $DRY_RUN; then
-        # add -n explicitly for dry-run
         RSYNC_ARGS+=(-n --stats)
         echo "[DRY RUN] verify rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
 
-        # Run rsync in dry-run mode to get stats only
         out="$(rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1 || true)"
         files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
         : "${files:=0}"
@@ -473,32 +471,35 @@ verify_one_refcnt() {
         return 0
     fi
 
-    # LIVE RUN
+    # --- LIVE RUN ---
     echo "[LIVE] verify rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
 
     set +e
-    out="$(rsync -n "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1)"
+    out="$(rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1)"
     rc=$?
     set -e
 
     if [[ $rc -ne 0 ]]; then
-        echo "Verification rsync reported errors for: $SRC -> $DST"
+        echo "✘ Verification errors: $SRC -> $DST"
         echo "$out"
+        SUMMARY+=("✘ Verify failed: $SRC -> $DST")
         return 1
     fi
 
     if [[ -n "$out" ]]; then
-        echo "Verification found differences for: $SRC -> $DST"
+        echo "✘ Differences found: $SRC -> $DST"
         echo "$out"
+        SUMMARY+=("✘ Verify mismatch: $SRC -> $DST")
         return 1
     fi
 
+    # At this point, directories match
     if $VERIFY_CHECKSUM; then
-        echo "Verified OK (checksum): $SRC -> $DST"
-        SUMMARY+=("Verified OK (checksum): $SRC -> $DST")
+        echo "✔ Verified OK (checksum): $SRC -> $DST"
+        SUMMARY+=("✔ Verified OK (checksum): $SRC -> $DST")
     else
-        echo "Verified OK: $SRC -> $DST"
-        SUMMARY+=("Verified OK: $SRC -> $DST")
+        echo "✔ Verified OK (size/time): $SRC -> $DST"
+        SUMMARY+=("✔ Verified OK (size/time): $SRC -> $DST")
     fi
     return 0
 }
@@ -709,6 +710,24 @@ verify_all_refcnt() {
 
     return 0
 }
+config_preview_live() {
+    echo
+    echo "=== LIVE CONFIG PREVIEW ==="
+    echo "Would insert after 'export TGTDIR':"
+    echo "  $NEW_LINE"
+    SUMMARY+=("✔ Would insert (live preview): $NEW_LINE")
+
+    if grep -q "^$REFCNT_OLD" "$CONFIG_FILE"; then
+        echo
+        echo "Would also change:"
+        echo "  $REFCNT_OLD"
+        echo "  → $REFCNT_NEW"
+        SUMMARY+=("✔ Would change (live preview): $REFCNT_OLD → $REFCNT_NEW")
+    else
+        echo "No PLATFORM_DS_REFCNTS_ON_SSD=0 line found, no change made there."
+        SUMMARY+=("✘ No PLATFORM_DS_REFCNTS_ON_SSD=0 found (live preview)")
+    fi
+}
 
 # ---- Edit-mode (unchanged behavior) ----
 dry_run_preview() {
@@ -915,7 +934,8 @@ confirm_live_run() {
     copy_all_refcnt || true
 
     # Show config changes
-    dry_run_preview
+    config_preview_live
+    SUMMARY+=("✔ LIVE run preview complete")
     echo
 
     read -rp "Proceed with LIVE run? Type 'yes' to continue, anything else will cancel: " reply
