@@ -338,7 +338,10 @@ check_free_space() {
         echo "Warning: 'df' not available, skipping free space check."
         return 0
     fi
-    mkdir -p "$target_base"
+    if ! $DRY_RUN; then
+        mkdir -p "$target_base"
+    fi
+
     local avail
     avail="$(df -PB1 "$target_base" | awk 'NR==2{print $4}')"
     if [[ -z "$avail" ]]; then
@@ -663,11 +666,14 @@ dry_run_preview() {
         echo "${CYAN}=== END DIFF ===${RESET}"
     }
 
+    echo
+    echo "=== DRY-RUN CONFIG PREVIEW ==="
     echo "[DRY RUN] Would insert after 'export TGTDIR':"
     echo "  $NEW_LINE"
     SUMMARY+=("✔ Would insert: $NEW_LINE")
 
     if grep -q "^$REFCNT_OLD" "$CONFIG_FILE"; then
+        echo
         echo "[DRY RUN] Would also change:"
         echo "  $REFCNT_OLD"
         echo "  → $REFCNT_NEW"
