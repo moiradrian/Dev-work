@@ -396,8 +396,8 @@ check_free_space() {
 
 # ---- Rsync copy + verification (no deletion of sources) ----
 rsync_base_flags() {
-    # print one flag per line so process-substitution -> read -a builds a proper array
-    printf '%s\n' -aHAX --numeric-ids --sparse -W --info=progress2 --human-readable
+    # Base flags: safe attributes, numeric IDs, sparse, whole-file
+    printf '%s\n' -aHAX --numeric-ids --sparse -W --human-readable
 }
 
 rsync_verify_flags() {
@@ -447,19 +447,26 @@ copy_one_refcnt() {
     fi
 
     # LIVE RUN
+    RSYNC_ARGS=("${RSYNC_ARGS[@]/--info=progress2/}") # strip progress2 if present
+    RSYNC_ARGS+=(--info=stats2)
+
     echo "[LIVE] rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
 
-    local out files
-    if out="$(run_with_bar safe_rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/")"; then
-        files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
+    local tmpfile
+    tmpfile="$(mktemp)"
+    if run_with_bar rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1 | tee "$tmpfile"; then
+        local files
+        files="$(awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}' "$tmpfile")"
         : "${files:=0}"
-        printf "Directory %s: %'d files copied\n" "$base" "$files"
+        printf "\nDirectory %s: %'d files copied\n" "$base" "$files"
         SUMMARY+=("Directory $base: $files files copied")
         COPIED_FILES=$((COPIED_FILES + files))
+        rm -f "$tmpfile"
         return 0
     else
         SUMMARY+=("✘ rsync failed: $SRC -> $DST")
-        echo "$out"
+        cat "$tmpfile"
+        rm -f "$tmpfile"
         return 1
     fi
 
