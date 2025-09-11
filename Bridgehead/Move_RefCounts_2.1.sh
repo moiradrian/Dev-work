@@ -358,8 +358,8 @@ copy_one_refcnt() {
     RSYNC_ARGS+=(--stats)
 
     if $DRY_RUN; then
-        # Log rsync command to the log only
-        echo "[DRY RUN] rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >&2
+        # Log rsync command ONLY to log file
+        echo "[DRY RUN] rsync -n ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
 
         local out files
         out="$(rsync -n "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1 || true)"
@@ -375,7 +375,7 @@ copy_one_refcnt() {
     fi
 
     # LIVE RUN
-    echo "rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >&2
+    echo "[LIVE] rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
 
     local out files
     if out="$(rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1)"; then
@@ -397,11 +397,24 @@ verify_one_refcnt() {
     local -a RSYNC_ARGS
     IFS=$'\n' read -r -d '' -a RSYNC_ARGS < <(rsync_verify_flags && printf '\0')
 
-    # Dry-run verification: rsync -n should report nothing if identical
-    local out
+    local out rc
+
+    if $DRY_RUN; then
+        # Log rsync command ONLY to log file (with -n)
+        echo "[DRY RUN] verify rsync -n ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
+
+        # In dry-run verify, we just note it would be compared
+        echo "[DRY RUN] Verify: would compare $SRC -> $DST"
+        SUMMARY+=("Would verify: $SRC -> $DST")
+        return 0
+    fi
+
+    # LIVE RUN
+    echo "[LIVE] verify rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
+
     set +e
     out="$(rsync -n "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1)"
-    local rc=$?
+    rc=$?
     set -e
 
     if [[ $rc -ne 0 ]]; then
@@ -418,8 +431,10 @@ verify_one_refcnt() {
 
     if $VERIFY_CHECKSUM; then
         echo "Verified OK (checksum): $SRC -> $DST"
+        SUMMARY+=("Verified OK (checksum): $SRC -> $DST")
     else
         echo "Verified OK: $SRC -> $DST"
+        SUMMARY+=("Verified OK: $SRC -> $DST")
     fi
     return 0
 }
