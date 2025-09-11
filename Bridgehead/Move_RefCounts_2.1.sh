@@ -355,29 +355,26 @@ copy_one_refcnt() {
 
     local -a RSYNC_ARGS
     IFS=$'\n' read -r -d '' -a RSYNC_ARGS < <(rsync_base_flags && printf '\0')
-
-    # Always include --stats so we can parse file counts
     RSYNC_ARGS+=(--stats)
 
     if $DRY_RUN; then
-        # Log rsync command to log file only
+        # Log rsync command to the log only
         echo "[DRY RUN] rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >&2
 
         local out files
         out="$(rsync -n "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1 || true)"
-
         files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
         : "${files:=0}"
 
         printf "Directory %s: %'d files would be copied\n" "$base" "$files"
+        SUMMARY+=("Directory $base: $files files would be copied")
 
         DRY_COPY_FILES=$((DRY_COPY_FILES + files))
-        SUMMARY+=("✔ Would copy $files files: $SRC -> $DST")
+        COPIED_FILES=$((COPIED_FILES + files))
         return 0
     fi
 
     # LIVE RUN
-    echo "Running rsync for directory $base ..."
     echo "rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >&2
 
     local out files
@@ -385,7 +382,8 @@ copy_one_refcnt() {
         files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
         : "${files:=0}"
         printf "Directory %s: %'d files copied\n" "$base" "$files"
-        SUMMARY+=("✔ Copied $files files: $SRC -> $DST")
+        SUMMARY+=("Directory $base: $files files copied")
+        COPIED_FILES=$((COPIED_FILES + files))
         return 0
     else
         SUMMARY+=("✘ rsync failed: $SRC -> $DST")
