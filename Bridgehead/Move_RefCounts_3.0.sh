@@ -301,51 +301,73 @@ verify_ready_to_stop() {
 
 
 wait_for_service_stop() {
-	local service="$1"
-	local timeout="${2:-$STOP_TIMEOUT}"
+    local service="$1"
+    local timeout="${2:-$STOP_TIMEOUT}"
 
-	local spinner='-\|/'
-	local i=0
-	local start_ts
-	start_ts=$(date +%s)
+    local spinner='-\|/'
+    local i=0
 
-	# Initial snapshot
-	local sys_state svc_state
-	sys_state=$(get_system_state 2>/dev/null || echo "unknown")
-	svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
+    # Initial snapshot
+    local sys_state svc_state
+    sys_state=$(get_system_state 2>/dev/null || echo "unknown")
+    svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
 
-	echo -e "${YELLOW}Stopping '${service}' …${NC}"
-	echo "System: ${sys_state} | Service: ${svc_state}"
+    if $DRY_RUN; then
+        echo -e "${YELLOW}[DRY RUN] Stopping '${service}' … (simulated)${NC}"
+        echo "System: ${sys_state} | Service: ${svc_state}"
 
-	while true; do
-		i=$(((i + 1) % 4))
-		local spin="${spinner:$i:1}"
+        local end=$((SECONDS+5)) # 5s spinner simulation
+        while (( SECONDS < end )); do
+            i=$(((i+1)%4))
+            printf "\r%s System: %s | Service: %s" "${spinner:$i:1}" "$sys_state" "$svc_state"
+            sleep 0.2
+        done
+        printf "\r\033[2K"
+        echo -e "${YELLOW}Dry Run Information:${NC}"
+        echo "• Would stop service: ${service}"
+        echo "• Command to run    : systemctl stop ${service}"
+        echo "• Wait strategy     : poll until 'System State=Stopped' and service inactive (timeout ${timeout}s)"
+        SUMMARY+=("[DRY RUN] Would stop service: $service")
+        return 0
+    fi
 
-		sys_state=$(get_system_state 2>/dev/null || echo "unknown")
-		svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
+    # --- LIVE RUN ---
+    local start_ts
+    start_ts=$(date +%s)
 
-		printf "\033[2A"
-		if [[ "${sys_state,,}" == "stopped" ]]; then
-			printf "${GREEN}Stopping '%s' %s${NC}\033[0K\n" "$service" "$spin"
-			printf "System: ${GREEN}%s${NC} | Service: %s\033[0K\n" "$sys_state" "$svc_state"
-			sleep 1
-			printf "\r\033[0K"
-			SUMMARY+=("✔ Service stopped: $service (System=$sys_state)")
-			return 0
-		else
-			printf "${YELLOW}Stopping '%s' %s${NC}\033[0K\n" "$service" "$spin"
-			printf "System: %s | Service: %s\033[0K\n" "$sys_state" "$svc_state"
-		fi
+    echo -e "${YELLOW}Stopping '${service}' …${NC}"
+    echo "System: ${sys_state} | Service: ${svc_state}"
 
-		if (($(date +%s) - start_ts >= timeout)); then
-			printf "\r\033[2K"
-			echo -e "${RED}Timeout waiting for system to stop (>${timeout}s). Last: System='${sys_state}', Service='${svc_state}'${NC}"
-			SUMMARY+=("✘ Stop timeout for $service")
-			return 1
-		fi
+    while true; do
+        i=$(((i + 1) % 4))
+        local spin="${spinner:$i:1}"
 
-		sleep 0.2
-	done
+        # Refresh states
+        sys_state=$(get_system_state 2>/dev/null || echo "unknown")
+        svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
+
+        printf "\033[2A"
+        if [[ "${sys_state,,}" == "stopped" ]]; then
+            printf "${GREEN}Stopping '%s' %s${NC}\033[0K\n" "$service" "$spin"
+            printf "System: ${GREEN}%s${NC} | Service: %s\033[0K\n" "$sys_state" "$svc_state"
+            sleep 1
+            printf "\r\033[0K"
+            log info "Stop complete: System State='${sys_state}', service='${service}', svc_state='${svc_state}'"
+            return 0
+        else
+            printf "${YELLOW}Stopping '%s' %s${NC}\033[0K\n" "$service" "$spin"
+            printf "System: %s | Service: %s\033[0K\n" "$sys_state" "$svc_state"
+        fi
+
+        if (( $(date +%s) - start_ts >= timeout )); then
+            printf "\r\033[2K"
+            echo -e "${RED}Timeout waiting for system to reach 'Stopped' (>${timeout}s). Last: System='${sys_state}', Service='${svc_state}'${NC}"
+            log error "Stop timeout: last System State='${sys_state}', svc_state='${svc_state}'"
+            return 1
+        fi
+
+        sleep 0.2
+    done
 }
 
 start_services() {
