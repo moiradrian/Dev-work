@@ -206,44 +206,63 @@ parse_args() {
 	PARSED_ARGS=("${args[@]}")
 }
 
+
 # ---- Mountpoint normalization (phase 2: after DRY_RUN is known) ----
 setup_mountpoint() {
-	if $SCAN_ONLY; then
-		return
-	fi
+    if $SCAN_ONLY; then
+        return
+    fi
 
-	if [[ ${#PARSED_ARGS[@]} -gt 0 ]]; then
-		MOUNTPOINT="${PARSED_ARGS[0]}"
-	else
-		read -rp "Enter the full mount path (e.g. /testmnt or /testmnt/subdir): " MOUNTPOINT
-	fi
+    while true; do
+        if [[ ${#PARSED_ARGS[@]} -gt 0 && -z "$MOUNTPOINT" ]]; then
+            MOUNTPOINT="${PARSED_ARGS[0]}"
+        elif [[ -z "$MOUNTPOINT" ]]; then
+            read -rp "Enter the full mount path (e.g. /testmnt or /testmnt/subdir): " MOUNTPOINT
+        fi
 
-	# Require full path
-	if [[ -z "$MOUNTPOINT" || "${MOUNTPOINT:0:1}" != "/" ]]; then
-		echo "Error: Mountpoint must be a full path starting with '/'." >&2
-		exit 1
-	fi
+        # Require full path
+        if [[ -z "$MOUNTPOINT" || "${MOUNTPOINT:0:1}" != "/" ]]; then
+            echo -e "${RED}Error: Mountpoint must be a full path starting with '/'.${NC}"
+            MOUNTPOINT=""
+            continue
+        fi
 
-	# Strip any trailing slash
-	MOUNTPOINT="${MOUNTPOINT%/}"
+        # Strip trailing slash
+        MOUNTPOINT="${MOUNTPOINT%/}"
 
-	# If user included /ssd, strip it off
-	if [[ "$MOUNTPOINT" =~ /ssd$ ]]; then
-		MOUNTPOINT="${MOUNTPOINT%/ssd}"
-	fi
+        # If user included /ssd, strip it off
+        if [[ "$MOUNTPOINT" =~ /ssd$ ]]; then
+            MOUNTPOINT="${MOUNTPOINT%/ssd}"
+        fi
 
-	# Build export line
-	NEW_LINE="export TGTSSDDIR=${MOUNTPOINT}/ssd/"
+        # Ensure the directory exists
+        if [[ ! -d "$MOUNTPOINT" ]]; then
+            echo -e "${RED}Error: Mountpoint '$MOUNTPOINT' does not exist. Please re-enter.${NC}"
+            MOUNTPOINT=""
+            continue
+        fi
 
-	# Create ssd dir only in LIVE mode
-	if ! $DRY_RUN; then
-		if [[ ! -d "${MOUNTPOINT}/ssd" ]]; then
-			mkdir -p "${MOUNTPOINT}/ssd"
-			echo "Created directory: ${MOUNTPOINT}/ssd"
-		fi
-	fi
+        # Ensure it’s an actual mountpoint
+        if ! mountpoint -q "$MOUNTPOINT"; then
+            echo -e "${RED}Error: '$MOUNTPOINT' is not a mounted filesystem. Please re-enter.${NC}"
+            MOUNTPOINT=""
+            continue
+        fi
 
-	SUMMARY+=("✔ Using target SSD directory: ${MOUNTPOINT}/ssd/")
+        # Build export line
+        NEW_LINE="export TGTSSDDIR=${MOUNTPOINT}/ssd/"
+
+        # Create ssd dir only in LIVE mode
+        if ! $DRY_RUN; then
+            if [[ ! -d "${MOUNTPOINT}/ssd" ]]; then
+                mkdir -p "${MOUNTPOINT}/ssd"
+                echo "Created directory: ${MOUNTPOINT}/ssd"
+            fi
+        fi
+
+        SUMMARY+=("✔ Using target SSD directory: ${MOUNTPOINT}/ssd/")
+        break
+    done
 }
 
 # ---- Logging ----
