@@ -51,20 +51,22 @@ usage() {
 }
 
 decide_dryrun_target() {
-	# Only asked in DRY-RUN mode
+	# Only asked in DRY-RUN or TEST mode
 	if ! $DRY_RUN; then
 		return
 	fi
 
 	local ans
 	read -rp "Is the new SSD location mounted and available now? [yes/NO]: " ans
-	if [[ "$ans" == "yes" ]]; then
+	if [[ "${ans,,}" == "yes" ]]; then
 		DRY_HAS_TARGET=true
 		# We DO want a mountpoint now (for space checks and rsync -n paths)
 		setup_mountpoint
 	else
 		DRY_HAS_TARGET=false
-		echo "[DRY RUN] No target mount selected — will SKIP space checks and rsync-based stats."
+		echo "[DRY RUN] No target mount selected."
+		echo "[DRY RUN] Will run SCAN-ONLY mode instead."
+		SCAN_ONLY=true
 	fi
 }
 
@@ -1197,13 +1199,15 @@ main() {
 		echo
 
 		decide_dryrun_target
-		# --- Dry-run service workflow preview ---
 		verify_ready_to_stop
 		wait_for_service_stop "ocards"
+
 		copy_all_refcnt || true
 		verify_all_refcnt || true
-		start_services
+
 		dry_run_preview
+		start_services
+		
 		print_summary
 		exit 0
 	fi
