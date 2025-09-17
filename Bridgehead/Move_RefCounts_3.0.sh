@@ -209,7 +209,6 @@ parse_args() {
     PARSED_ARGS=("${args[@]}")
 }
 
-
 # ---- Mountpoint normalization (phase 2: after DRY_RUN is known) ----
 setup_mountpoint() {
     if $SCAN_ONLY; then
