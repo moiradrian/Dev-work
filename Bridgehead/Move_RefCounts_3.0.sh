@@ -61,11 +61,13 @@ decide_dryrun_target() {
 	read -rp "Is the new SSD location mounted and available now? [yes/NO]: " ans
 	if [[ "${ans,,}" == "yes" ]]; then
 		DRY_HAS_TARGET=true
-		DRY_SKIP_SERVICES="false" # <--- ensure services will start
+		DRY_SKIP_SERVICES=false # boolean, no quotes
+		echo "[DEBUG] decide_dryrun_target: DRY_HAS_TARGET=true, DRY_SKIP_SERVICES=false"
 		setup_mountpoint
 	else
 		DRY_HAS_TARGET=false
-		DRY_SKIP_SERVICES="true" # <--- skip services explicitly
+		DRY_SKIP_SERVICES=true # boolean, no quotes
+		echo "[DEBUG] decide_dryrun_target: DRY_HAS_TARGET=false, DRY_SKIP_SERVICES=true"
 		echo "[DRY RUN] No target mount selected."
 		echo "[DRY RUN] Will run SCAN-ONLY mode instead."
 	fi
@@ -419,6 +421,9 @@ wait_for_service_stop() {
 }
 
 start_services() {
+	echo "[DEBUG] Entering start_services(), DRY_RUN=$DRY_RUN, DRY_SKIP_SERVICES=$DRY_SKIP_SERVICES" | tee -a "$LOG_FILE"
+	set +e
+
 	local service="ocards"
 	echo -e "\n${GREEN}Starting QoreStor services (${service})${NC}"
 
@@ -1209,19 +1214,18 @@ main() {
 
 		dry_run_preview
 
-		if ["$DRY_SKIP_SERVICES" = false]; then
+		echo "[DEBUG] DRY_SKIP_SERVICES='$DRY_SKIP_SERVICES'"
+		echo "[DEBUG] DRY_HAS_TARGET='$DRY_HAS_TARGET'"
+
+		if [ "$DRY_SKIP_SERVICES" = false ]; then
+			echo "[DEBUG] Entering start_services branch"
 			echo
-			sleep 0.1
 			echo "[DRY RUN] Simulating service restart ..."
-			sleep 0.1
-			echo "[Dry RUN] (no actual service commands executed)"
-			sleep 0.1
 			start_services
 			echo "[DRY RUN] Service restart simulation complete."
-			sleep 0.1
 		else
+			echo "[DEBUG] Entering skip-services branch"
 			echo "[DRY RUN] Skipping service restart (user chose no mountpoint)."
-			sleep 0.1
 			SUMMARY+=("✔ DRY-RUN: scan-only, no service restart simulated")
 		fi
 
