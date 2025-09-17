@@ -29,17 +29,16 @@ DRY_COPY_BYTES=0
 TEST_MODE=false
 
 # ---- Defaults ----
-STOP_TIMEOUT=60           # seconds to wait for service to stop
-START_TIMEOUT=120         # seconds to wait for service startup
-START_POLL_INTERVAL=2     # seconds between state checks
+STOP_TIMEOUT=60       # seconds to wait for service to stop
+START_TIMEOUT=120     # seconds to wait for service startup
+START_POLL_INTERVAL=2 # seconds between state checks
 
 # ---- Colors ----
 RED=$'\033[31m'
 GREEN=$'\033[32m'
 YELLOW=$'\033[33m'
 CYAN=$'\033[36m'
-NC=$'\033[0m'   # reset
-
+NC=$'\033[0m' # reset
 
 # ---- Functions ----
 usage() {
@@ -177,94 +176,106 @@ run_with_bar() {
 
 # ---- Arg parsing (phase 1 only: detect flags, save args) ----
 parse_args() {
-    local args=()
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-        --dry-run)
-            DRY_RUN=true
-            shift
-            ;;
-        --scan-only)
-            SCAN_ONLY=true
-            shift
-            ;;
-        --checksum-verify)
-            VERIFY_CHECKSUM=true
-            shift
-            ;;
-        --test)  # hidden option
-            TEST_MODE=true
-            shift
-            ;;
-        -h | --help)
-            usage
-            exit 0
-            ;;
-        *)
-            args+=("$1")
-            shift
-            ;;
-        esac
-    done
-    PARSED_ARGS=("${args[@]}")
+	local args=()
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--dry-run)
+			DRY_RUN=true
+			shift
+			;;
+		--scan-only)
+			SCAN_ONLY=true
+			shift
+			;;
+		--checksum-verify)
+			VERIFY_CHECKSUM=true
+			shift
+			;;
+		--test) # hidden option
+			TEST_MODE=true
+			shift
+			;;
+		-h | --help)
+			usage
+			exit 0
+			;;
+		*)
+			args+=("$1")
+			shift
+			;;
+		esac
+	done
+	PARSED_ARGS=("${args[@]}")
 }
 
 # ---- Mountpoint normalization (phase 2: after DRY_RUN is known) ----
 setup_mountpoint() {
-    if $SCAN_ONLY; then
-        return
-    fi
+	if $SCAN_ONLY; then
+		return
+	fi
 
-    while true; do
-        if [[ ${#PARSED_ARGS[@]} -gt 0 && -z "$MOUNTPOINT" ]]; then
-            MOUNTPOINT="${PARSED_ARGS[0]}"
-        elif [[ -z "$MOUNTPOINT" ]]; then
-            read -rp "Enter the full mount path (e.g. /testmnt or /testmnt/subdir): " MOUNTPOINT
-        fi
+	while true; do
+		if [[ ${#PARSED_ARGS[@]} -gt 0 && -z "$MOUNTPOINT" ]]; then
+			MOUNTPOINT="${PARSED_ARGS[0]}"
+		elif [[ -z "$MOUNTPOINT" ]]; then
+			read -rp "Enter the full mount path (e.g. /testmnt or /testmnt/subdir): " MOUNTPOINT
+		fi
 
-        # Require full path
-        if [[ -z "$MOUNTPOINT" || "${MOUNTPOINT:0:1}" != "/" ]]; then
-            echo -e "${RED}Error: Mountpoint must be a full path starting with '/'.${NC}"
-            MOUNTPOINT=""
-            continue
-        fi
+		# Require full path
+		if [[ -z "$MOUNTPOINT" || "${MOUNTPOINT:0:1}" != "/" ]]; then
+			echo -e "${RED}Error: Mountpoint must be a full path starting with '/'.${NC}"
+			MOUNTPOINT=""
+			continue
+		fi
 
-        # Strip trailing slash
-        MOUNTPOINT="${MOUNTPOINT%/}"
+		# Strip trailing slash
+		MOUNTPOINT="${MOUNTPOINT%/}"
 
-        # If user included /ssd, strip it off
-        if [[ "$MOUNTPOINT" =~ /ssd$ ]]; then
-            MOUNTPOINT="${MOUNTPOINT%/ssd}"
-        fi
+		# If user included /ssd, strip it off
+		if [[ "$MOUNTPOINT" =~ /ssd$ ]]; then
+			MOUNTPOINT="${MOUNTPOINT%/ssd}"
+		fi
 
-        # Ensure the directory exists
-        if [[ ! -d "$MOUNTPOINT" ]]; then
-            echo -e "${RED}Error: Mountpoint '$MOUNTPOINT' does not exist. Please re-enter.${NC}"
-            MOUNTPOINT=""
-            continue
-        fi
+		# --- Validation rules ---
+		if $TEST_MODE; then
+			# In test mode, only check existence of the directory
+			if [[ ! -d "$MOUNTPOINT" ]]; then
+				echo -e "${RED}Error: Directory '$MOUNTPOINT' does not exist. Please re-enter.${NC}"
+				MOUNTPOINT=""
+				continue
+			else
+				echo "[TEST MODE] Directory '$MOUNTPOINT' exists (mountpoint check skipped)."
+			fi
+		elif $DRY_RUN; then
+			# In dry-run, check directory existence only
+			if [[ ! -d "$MOUNTPOINT" ]]; then
+				echo -e "${RED}Error: Directory '$MOUNTPOINT' does not exist. Please re-enter.${NC}"
+				MOUNTPOINT=""
+				continue
+			fi
+		else
+			# In live mode, enforce mountpoint check
+			if ! mountpoint -q "$MOUNTPOINT"; then
+				echo -e "${RED}Error: '$MOUNTPOINT' is not a mounted filesystem. Please re-enter.${NC}"
+				MOUNTPOINT=""
+				continue
+			fi
+		fi
 
-        # Ensure it’s an actual mountpoint
-        if ! mountpoint -q "$MOUNTPOINT"; then
-            echo -e "${RED}Error: '$MOUNTPOINT' is not a mounted filesystem. Please re-enter.${NC}"
-            MOUNTPOINT=""
-            continue
-        fi
+		# Build export line
+		NEW_LINE="export TGTSSDDIR=${MOUNTPOINT}/ssd/"
 
-        # Build export line
-        NEW_LINE="export TGTSSDDIR=${MOUNTPOINT}/ssd/"
+		# Create ssd dir only in LIVE mode
+		if ! $DRY_RUN; then
+			if [[ ! -d "${MOUNTPOINT}/ssd" ]]; then
+				mkdir -p "${MOUNTPOINT}/ssd"
+				echo "Created directory: ${MOUNTPOINT}/ssd"
+			fi
+		fi
 
-        # Create ssd dir only in LIVE mode
-        if ! $DRY_RUN; then
-            if [[ ! -d "${MOUNTPOINT}/ssd" ]]; then
-                mkdir -p "${MOUNTPOINT}/ssd"
-                echo "Created directory: ${MOUNTPOINT}/ssd"
-            fi
-        fi
-
-        SUMMARY+=("✔ Using target SSD directory: ${MOUNTPOINT}/ssd/")
-        break
-    done
+		SUMMARY+=("✔ Using target SSD directory: ${MOUNTPOINT}/ssd/")
+		break
+	done
 }
 
 # ---- Logging ----
