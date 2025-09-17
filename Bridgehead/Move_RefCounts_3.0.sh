@@ -424,12 +424,14 @@ start_services() {
 	svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
 
 	if $DRY_RUN; then
-		# Spinner simulation (5s)
+		echo -e "${YELLOW}[DRY RUN] Starting '${service}' … (simulated)${NC}"
+		echo "Reason : ${reason}"
+		echo "Service: ${svc_state}"
+
+		# Spinner simulation for ~5s
 		local spinner='-\|/'
 		local i=0
 		local end=$((SECONDS + 5))
-
-		echo -e "${YELLOW}Starting '${service}' … (dry-run spinner)${NC}"
 		while ((SECONDS < end)); do
 			i=$(((i + 1) % 4))
 			printf "\r%s Reason: %s | Service: %s" "${spinner:$i:1}" "$reason" "$svc_state"
@@ -439,11 +441,11 @@ start_services() {
 
 		echo -e "${YELLOW}Dry Run Information:${NC}"
 		echo "• Would start service: ${service}"
-		echo "• Command to run      : systemctl start ${service}"
-		echo "• Wait strategy       : poll until 'Filesystem is fully operational for I/O.' and service active (timeout ${START_TIMEOUT}s)"
-		echo "• Current Reason      : ${reason}"
-		echo "• Current State       : ${svc_state}"
-		SUMMARY+=("[DRY RUN] Would start service: $service")
+		echo "• Command to run    : systemctl start ${service}"
+		echo "• Wait strategy     : poll until 'Reason=Filesystem is fully operational for I/O.' and service active (timeout ${START_TIMEOUT}s)"
+
+		echo -e "${GREEN}✔ Dry-run start simulation complete.${NC}"
+		SUMMARY+=("✔ DRY-RUN: would start ${service} (simulated)")
 		return 0
 	fi
 
