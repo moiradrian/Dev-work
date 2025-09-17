@@ -277,97 +277,96 @@ get_system_reason() {
 }
 
 verify_ready_to_stop() {
-    local service="ocards"
-    local sys_state svc_state reason
-    sys_state=$(get_system_state 2>/dev/null || echo "unknown")
-    svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
-    reason=$(get_system_reason 2>/dev/null || echo "unknown")
+	local service="ocards"
+	local sys_state svc_state reason
+	sys_state=$(get_system_state 2>/dev/null || echo "unknown")
+	svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
+	reason=$(get_system_reason 2>/dev/null || echo "unknown")
 
-    echo "=== SERVICE STOP PRECHECK ==="
-    echo "System State : $sys_state"
-    echo "Service State: $svc_state"
-    echo "Reason       : $reason"
+	echo "=== SERVICE STOP PRECHECK ==="
+	echo "System State : $sys_state"
+	echo "Service State: $svc_state"
+	echo "Reason       : $reason"
 
-    if $DRY_RUN; then
-        echo "[DRY RUN] Would proceed to stop service: $service"
-        SUMMARY+=("✔ DRY-RUN: would stop ${service} (precheck OK)")
-        return 0
-    fi
+	if $DRY_RUN; then
+		echo "[DRY RUN] Would proceed to stop service: $service"
+		SUMMARY+=("✔ DRY-RUN: would stop ${service} (precheck OK)")
+		return 0
+	fi
 
-    # In live mode, we just show info and continue
-    SUMMARY+=("✔ Precheck before stopping ${service}: sys=$sys_state, svc=$svc_state, reason=$reason")
-    return 0
+	# In live mode, we just show info and continue
+	SUMMARY+=("✔ Precheck before stopping ${service}: sys=$sys_state, svc=$svc_state, reason=$reason")
+	return 0
 }
 
-
 wait_for_service_stop() {
-    local service="$1"
-    local timeout="${2:-$STOP_TIMEOUT}"
+	local service="$1"
+	local timeout="${2:-$STOP_TIMEOUT}"
 
-    local spinner='-\|/'
-    local i=0
+	local spinner='-\|/'
+	local i=0
 
-    # Initial snapshot
-    local sys_state svc_state
-    sys_state=$(get_system_state 2>/dev/null || echo "unknown")
-    svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
+	# Initial snapshot
+	local sys_state svc_state
+	sys_state=$(get_system_state 2>/dev/null || echo "unknown")
+	svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
 
-    if $DRY_RUN; then
-        echo -e "${YELLOW}[DRY RUN] Stopping '${service}' … (simulated)${NC}"
-        echo "System: ${sys_state} | Service: ${svc_state}"
+	if $DRY_RUN; then
+		echo -e "${YELLOW}[DRY RUN] Stopping '${service}' … (simulated)${NC}"
+		echo "System: ${sys_state} | Service: ${svc_state}"
 
-        local end=$((SECONDS+5)) # 5s spinner simulation
-        while (( SECONDS < end )); do
-            i=$(((i+1)%4))
-            printf "\r%s System: %s | Service: %s" "${spinner:$i:1}" "$sys_state" "$svc_state"
-            sleep 0.2
-        done
-        printf "\r\033[2K"
-        echo -e "${YELLOW}Dry Run Information:${NC}"
-        echo "• Would stop service: ${service}"
-        echo "• Command to run    : systemctl stop ${service}"
-        echo "• Wait strategy     : poll until 'System State=Stopped' and service inactive (timeout ${timeout}s)"
-        SUMMARY+=("[DRY RUN] Would stop service: $service")
-        return 0
-    fi
+		local end=$((SECONDS + 5)) # 5s spinner simulation
+		while ((SECONDS < end)); do
+			i=$(((i + 1) % 4))
+			printf "\r%s System: %s | Service: %s" "${spinner:$i:1}" "$sys_state" "$svc_state"
+			sleep 0.2
+		done
+		printf "\r\033[2K"
+		echo -e "${YELLOW}Dry Run Information:${NC}"
+		echo "• Would stop service: ${service}"
+		echo "• Command to run    : systemctl stop ${service}"
+		echo "• Wait strategy     : poll until 'System State=Stopped' and service inactive (timeout ${timeout}s)"
+		SUMMARY+=("[DRY RUN] Would stop service: $service")
+		return 0
+	fi
 
-    # --- LIVE RUN ---
-    local start_ts
-    start_ts=$(date +%s)
+	# --- LIVE RUN ---
+	local start_ts
+	start_ts=$(date +%s)
 
-    echo -e "${YELLOW}Stopping '${service}' …${NC}"
-    echo "System: ${sys_state} | Service: ${svc_state}"
+	echo -e "${YELLOW}Stopping '${service}' …${NC}"
+	echo "System: ${sys_state} | Service: ${svc_state}"
 
-    while true; do
-        i=$(((i + 1) % 4))
-        local spin="${spinner:$i:1}"
+	while true; do
+		i=$(((i + 1) % 4))
+		local spin="${spinner:$i:1}"
 
-        # Refresh states
-        sys_state=$(get_system_state 2>/dev/null || echo "unknown")
-        svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
+		# Refresh states
+		sys_state=$(get_system_state 2>/dev/null || echo "unknown")
+		svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
 
-        printf "\033[2A"
-        if [[ "${sys_state,,}" == "stopped" ]]; then
-            printf "${GREEN}Stopping '%s' %s${NC}\033[0K\n" "$service" "$spin"
-            printf "System: ${GREEN}%s${NC} | Service: %s\033[0K\n" "$sys_state" "$svc_state"
-            sleep 1
-            printf "\r\033[0K"
-            log info "Stop complete: System State='${sys_state}', service='${service}', svc_state='${svc_state}'"
-            return 0
-        else
-            printf "${YELLOW}Stopping '%s' %s${NC}\033[0K\n" "$service" "$spin"
-            printf "System: %s | Service: %s\033[0K\n" "$sys_state" "$svc_state"
-        fi
+		printf "\033[2A"
+		if [[ "${sys_state,,}" == "stopped" ]]; then
+			printf "${GREEN}Stopping '%s' %s${NC}\033[0K\n" "$service" "$spin"
+			printf "System: ${GREEN}%s${NC} | Service: %s\033[0K\n" "$sys_state" "$svc_state"
+			sleep 1
+			printf "\r\033[0K"
+			log info "Stop complete: System State='${sys_state}', service='${service}', svc_state='${svc_state}'"
+			return 0
+		else
+			printf "${YELLOW}Stopping '%s' %s${NC}\033[0K\n" "$service" "$spin"
+			printf "System: %s | Service: %s\033[0K\n" "$sys_state" "$svc_state"
+		fi
 
-        if (( $(date +%s) - start_ts >= timeout )); then
-            printf "\r\033[2K"
-            echo -e "${RED}Timeout waiting for system to reach 'Stopped' (>${timeout}s). Last: System='${sys_state}', Service='${svc_state}'${NC}"
-            log error "Stop timeout: last System State='${sys_state}', svc_state='${svc_state}'"
-            return 1
-        fi
+		if (($(date +%s) - start_ts >= timeout)); then
+			printf "\r\033[2K"
+			echo -e "${RED}Timeout waiting for system to reach 'Stopped' (>${timeout}s). Last: System='${sys_state}', Service='${svc_state}'${NC}"
+			log error "Stop timeout: last System State='${sys_state}', svc_state='${svc_state}'"
+			return 1
+		fi
 
-        sleep 0.2
-    done
+		sleep 0.2
+	done
 }
 
 start_services() {
@@ -379,13 +378,30 @@ start_services() {
 	svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
 
 	if $DRY_RUN; then
-		echo "[DRY RUN] Would run: systemctl start ${service}"
-		echo "• Current Reason: ${reason}"
-		echo "• Current State : ${svc_state}"
-		SUMMARY+=("✔ DRY-RUN: would start ${service}")
+		# Spinner simulation (5s)
+		local spinner='-\|/'
+		local i=0
+		local end=$((SECONDS + 5))
+
+		echo -e "${YELLOW}Starting '${service}' … (dry-run spinner)${NC}"
+		while ((SECONDS < end)); do
+			i=$(((i + 1) % 4))
+			printf "\r%s Reason: %s | Service: %s" "${spinner:$i:1}" "$reason" "$svc_state"
+			sleep 0.2
+		done
+		printf "\r\033[2K"
+
+		echo -e "${YELLOW}Dry Run Information:${NC}"
+		echo "• Would start service: ${service}"
+		echo "• Command to run      : systemctl start ${service}"
+		echo "• Wait strategy       : poll until 'Filesystem is fully operational for I/O.' and service active (timeout ${START_TIMEOUT}s)"
+		echo "• Current Reason      : ${reason}"
+		echo "• Current State       : ${svc_state}"
+		SUMMARY+=("[DRY RUN] Would start service: $service")
 		return 0
 	fi
 
+	# --- LIVE RUN ---
 	if [[ "$svc_state" != "active" ]]; then
 		systemctl start "$service" || echo "${YELLOW}systemctl start returned non-zero, continuing wait...${NC}"
 	fi
@@ -1085,109 +1101,109 @@ confirm_live_run() {
 		exit 0
 	fi
 }
-       
+
 # ---- Main ----
 main() {
-    parse_args "$@" # phase 1: detect flags, store args
-    setup_logging
+	parse_args "$@" # phase 1: detect flags, store args
+	setup_logging
 
-    if $SCAN_ONLY; then
-        echo
-        echo "=== RUN PREVIEW: SCAN-ONLY MODE ==="
-        echo
-        echo "✔ MODE: SCAN-ONLY"
+	if $SCAN_ONLY; then
+		echo
+		echo "=== RUN PREVIEW: SCAN-ONLY MODE ==="
+		echo
+		echo "✔ MODE: SCAN-ONLY"
 
-        if $VERIFY_CHECKSUM; then
-            echo "✔ Checksum verification enabled"
-        else
-            echo "✘ Checksum verification not enabled"
-        fi
-        echo
+		if $VERIFY_CHECKSUM; then
+			echo "✔ Checksum verification enabled"
+		else
+			echo "✘ Checksum verification not enabled"
+		fi
+		echo
 
-        scan_refcnt_sizes || true
-        print_summary
-        exit 0
-    fi
+		scan_refcnt_sizes || true
+		print_summary
+		exit 0
+	fi
 
-    if $DRY_RUN; then
-        echo
-        echo "=== RUN PREVIEW: DRY-RUN MODE ==="
-        echo
-        echo "✔ MODE: DRY-RUN"
+	if $DRY_RUN; then
+		echo
+		echo "=== RUN PREVIEW: DRY-RUN MODE ==="
+		echo
+		echo "✔ MODE: DRY-RUN"
 
-        if $VERIFY_CHECKSUM; then
-            echo "✔ Checksum verification enabled"
-        else
-            echo "✘ Checksum verification not enabled"
-        fi
+		if $VERIFY_CHECKSUM; then
+			echo "✔ Checksum verification enabled"
+		else
+			echo "✘ Checksum verification not enabled"
+		fi
 
-        if $DRY_HAS_TARGET; then
-            echo "✔ Dry-run target available"
-            echo "Mountpoint: $MOUNTPOINT"
-        else
-            echo "✘ Dry-run target not available (plan-only mode)"
-        fi
-        echo
+		if $DRY_HAS_TARGET; then
+			echo "✔ Dry-run target available"
+			echo "Mountpoint: $MOUNTPOINT"
+		else
+			echo "✘ Dry-run target not available (plan-only mode)"
+		fi
+		echo
 
-        decide_dryrun_target
-        # --- Dry-run service workflow preview ---
-        verify_ready_to_stop
-        wait_for_service_stop "ocards"
-        copy_all_refcnt || true
-        verify_all_refcnt || true
-        dry_run_preview
-        start_services
-        print_summary
-        exit 0
-    fi
+		decide_dryrun_target
+		# --- Dry-run service workflow preview ---
+		verify_ready_to_stop
+		wait_for_service_stop "ocards"
+		copy_all_refcnt || true
+		verify_all_refcnt || true
+		dry_run_preview
+		start_services
+		print_summary
+		exit 0
+	fi
 
-    # --- LIVE RUN ---
-    setup_mountpoint
-    confirm_live_run
+	# --- LIVE RUN ---
+	setup_mountpoint
+	confirm_live_run
 
-    if [[ ! -f "$CONFIG_FILE" ]]; then
-        echo "Error: Config file $CONFIG_FILE not found!"
-        print_summary
-        exit 1
-    fi
+	if [[ ! -f "$CONFIG_FILE" ]]; then
+		echo "Error: Config file $CONFIG_FILE not found!"
+		print_summary
+		exit 1
+	fi
 
-    make_backup
+	make_backup
 
-    # --- New service stop/start workflow ---
-    verify_ready_to_stop || {
-        echo "Precheck failed, aborting before stop."
-        print_summary
-        exit 1
-    }
-    wait_for_service_stop "ocards" || {
-        echo "Stop failed, aborting."
-        print_summary
-        exit 1
-    }
+	# --- New service stop/start workflow ---
+	verify_ready_to_stop || {
+		echo "Precheck failed, aborting before stop."
+		print_summary
+		exit 1
+	}
+	wait_for_service_stop "ocards" || {
+		echo "Stop failed, aborting."
+		print_summary
+		exit 1
+	}
 
-    copy_all_refcnt || {
-        echo "Copy step failed. Aborting before any config changes."
-        print_summary
-        exit 1
-    }
+	copy_all_refcnt || {
+		echo "Copy step failed. Aborting before any config changes."
+		print_summary
+		exit 1
+	}
 
-    if $VERIFY_CHECKSUM; then
-        verify_all_refcnt || {
-            echo "Verification failed. Aborting before any config changes."
-            print_summary
-            exit 1
-        }
-    fi
+	if $VERIFY_CHECKSUM; then
+		verify_all_refcnt || {
+			echo "Verification failed. Aborting before any config changes."
+			print_summary
+			exit 1
+		}
+	fi
 
-    apply_changes
+	apply_changes
 
-    start_services || {
-        echo "Start failed; check logs for details."
-        print_summary
-        exit 1
-    }
+	start_services || {
+		echo "Start failed; check logs for details."
+		print_summary
+		exit 1
+	}
 
-    print_summary
+	print_summary
 }
 
 main "$@"
