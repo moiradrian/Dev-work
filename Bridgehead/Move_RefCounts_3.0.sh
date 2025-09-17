@@ -5,9 +5,9 @@ CONFIG_FILE="/etc/oca/oca_test.cfg"
 BACKUP_DIR="/etc/oca"
 LOG_DIR="/var/log/oca_edit"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-DRY_RUN=false
-SCAN_ONLY=false
-VERIFY_CHECKSUM=false
+DRY_RUN="false"
+SCAN_ONLY="false"
+VERIFY_CHECKSUM="false"
 MOUNTPOINT=""
 SCAN_FOUND=0
 SCAN_TOTAL_BYTES=0
@@ -23,11 +23,11 @@ LOG_FILE=""
 SUMMARY=()
 BACKUP_FILE=""
 
-DRY_HAS_TARGET=false # in dry-run: did user say the target is mounted?
+DRY_HAS_TARGET="false" # in dry-run: did user say the target is mounted?
 DRY_COPY_FILES=0
 DRY_COPY_BYTES=0
-DRY_SKIP_SERVICES=false
-TEST_MODE=false
+DRY_SKIP_SERVICES="false"
+TEST_MODE="false"
 
 # ---- Defaults ----
 STOP_TIMEOUT=60       # seconds to wait for service to stop
@@ -60,13 +60,13 @@ decide_dryrun_target() {
 	local ans
 	read -rp "Is the new SSD location mounted and available now? [yes/NO]: " ans
 	if [[ "${ans,,}" == "yes" ]]; then
-		DRY_HAS_TARGET=true
-		DRY_SKIP_SERVICES=false # boolean, no quotes
+		DRY_HAS_TARGET="true"
+		DRY_SKIP_SERVICES="false" # boolean, no quotes
 		echo "[DEBUG] decide_dryrun_target: DRY_HAS_TARGET=true, DRY_SKIP_SERVICES=false"
 		setup_mountpoint
 	else
-		DRY_HAS_TARGET=false
-		DRY_SKIP_SERVICES=true # boolean, no quotes
+		DRY_HAS_TARGET="false"
+		DRY_SKIP_SERVICES="true" # boolean, no quotes
 		echo "[DEBUG] decide_dryrun_target: DRY_HAS_TARGET=false, DRY_SKIP_SERVICES=true"
 		echo "[DRY RUN] No target mount selected."
 		echo "[DRY RUN] Will run SCAN-ONLY mode instead."
@@ -185,19 +185,19 @@ parse_args() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
 		--dry-run)
-			DRY_RUN=true
+			DRY_RUN="true"
 			shift
 			;;
 		--scan-only)
-			SCAN_ONLY=true
+			SCAN_ONLY="true"
 			shift
 			;;
 		--checksum-verify)
-			VERIFY_CHECKSUM=true
+			VERIFY_CHECKSUM="true"
 			shift
 			;;
 		--test) # hidden option
-			TEST_MODE=true
+			TEST_MODE="true"
 			shift
 			;;
 		-h | --help)
@@ -215,7 +215,7 @@ parse_args() {
 
 # ---- Mountpoint normalization (phase 2: after DRY_RUN is known) ----
 setup_mountpoint() {
-	if $SCAN_ONLY; then
+	if [ "$SCAN_ONLY" = "true" ]; then
 		return
 	fi
 
@@ -242,7 +242,7 @@ setup_mountpoint() {
 		fi
 
 		# --- Validation rules ---
-		if $TEST_MODE; then
+		if [ "$TEST_MODE" = "true" ]; then
 			# In test mode, only check existence of the directory
 			if [[ ! -d "$MOUNTPOINT" ]]; then
 				echo -e "${RED}Error: Directory '$MOUNTPOINT' does not exist. Please re-enter.${NC}"
@@ -251,7 +251,7 @@ setup_mountpoint() {
 			else
 				echo "[TEST MODE] Directory '$MOUNTPOINT' exists (mountpoint check skipped)."
 			fi
-		elif $DRY_RUN; then
+		elif [ "$DRY_RUN" = "true" ]; then
 			# In dry-run, check directory existence only
 			if [[ ! -d "$MOUNTPOINT" ]]; then
 				echo -e "${RED}Error: Directory '$MOUNTPOINT' does not exist. Please re-enter.${NC}"
@@ -295,9 +295,9 @@ setup_logging() {
 	echo "Backup dir: $BACKUP_DIR"
 	echo "Log file: $LOG_FILE"
 
-	if $DRY_RUN; then
+	if [ "$DRY_RUN" = "true" ]; then
 		echo "MODE: DRY-RUN"
-	elif $SCAN_ONLY; then
+	elif [ "$SCAN_ONLY" = "true" ]; then
 		echo "MODE: SCAN-ONLY"
 	else
 		echo "MODE: LIVE"
@@ -307,7 +307,7 @@ setup_logging() {
 	echo "Scan only: $SCAN_ONLY"
 	echo "Verify checksum: $VERIFY_CHECKSUM"
 
-	if $DRY_RUN; then
+	if [ "$DRY_RUN" = "true" ]; then
 		echo "✔ Dry-run target available: $DRY_HAS_TARGET"
 	fi
 
@@ -339,7 +339,7 @@ verify_ready_to_stop() {
 	echo "Service State: $svc_state"
 	echo "Reason       : $reason"
 
-	if $DRY_RUN; then
+	if [ "$DRY_RUN" = "true" ]; then
 		echo "[DRY RUN] Would proceed to stop service: $service"
 		SUMMARY+=("✔ DRY-RUN: would stop ${service} (precheck OK)")
 		return 0
@@ -362,7 +362,7 @@ wait_for_service_stop() {
 	sys_state=$(get_system_state 2>/dev/null || echo "unknown")
 	svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
 
-	if $DRY_RUN; then
+	if [ "$DRY_RUN" = "true" ]; then
 		echo -e "${YELLOW}[DRY RUN] Stopping '${service}' … (simulated)${NC}"
 		echo "System: ${sys_state} | Service: ${svc_state}"
 
@@ -421,6 +421,8 @@ wait_for_service_stop() {
 }
 
 start_services() {
+	echo "[DEBUG] start_services() was called" | tee -a "$LOG_FILE"
+
 	echo "[DEBUG] Entering start_services(), DRY_RUN=$DRY_RUN, DRY_SKIP_SERVICES=$DRY_SKIP_SERVICES" | tee -a "$LOG_FILE"
 	set +e
 
@@ -431,7 +433,7 @@ start_services() {
 	reason=$(get_system_reason 2>/dev/null || echo "unknown")
 	svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
 
-	if $DRY_RUN; then
+	if [ "$DRY_RUN" = "true" ]; then
 		echo -e "${YELLOW}[DRY RUN] Starting '${service}' … (simulated)${NC}"
 		echo "Reason : ${reason}"
 		echo "Service: ${svc_state}"
@@ -625,7 +627,7 @@ rsync_base_flags() {
 rsync_verify_flags() {
 	# start from base
 	mapfile -t base < <(rsync_base_flags)
-	if $VERIFY_CHECKSUM; then
+	if [ "$VERIFY_CHECKSUM" = "true" ]; then
 		base+=(--checksum)
 	fi
 	printf '%s\n' "${base[@]}"
@@ -649,7 +651,7 @@ copy_one_refcnt() {
 	IFS=$'\n' read -r -d '' -a RSYNC_ARGS < <(rsync_base_flags && printf '\0')
 	RSYNC_ARGS+=(--stats --info=progress2)
 
-	if $DRY_RUN; then
+	if [ "$DRY_RUN" = "true" ]; then
 		RSYNC_ARGS+=(-n)
 		echo "[DRY RUN] rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
 
@@ -695,7 +697,7 @@ verify_one_refcnt() {
 
 	local out rc files
 
-	if $DRY_RUN; then
+	if [ "$DRY_RUN" = "true" ]; then
 		RSYNC_ARGS+=(-n --stats)
 		echo "[DRY RUN] verify rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
 
@@ -731,7 +733,7 @@ verify_one_refcnt() {
 	fi
 
 	# At this point, directories match
-	if $VERIFY_CHECKSUM; then
+	if [ "$VERIFY_CHECKSUM" = "true" ]; then
 		echo "✔ Verified OK (checksum): $SRC -> $DST"
 		SUMMARY+=("✔ Verified OK (checksum): $SRC -> $DST")
 	else
@@ -794,7 +796,7 @@ copy_all_refcnt() {
 	IFS=$'\n' read -r -d '' -a RSYNC_ARGS < <(rsync_base_flags && printf '\0')
 	RSYNC_ARGS+=(--files-from="$filelist" --stats --info=progress2)
 
-	if $DRY_RUN; then
+	if [ "$DRY_RUN" = "true" ]; then
 		RSYNC_ARGS+=(-n)
 		echo "[DRY RUN] rsync ${RSYNC_ARGS[*]} $repo/ $target_base/" >>"$LOG_FILE"
 		rsync "${RSYNC_ARGS[@]}" "$repo/" "$target_base/" | grep -E 'Number of regular files transferred'
@@ -847,7 +849,7 @@ verify_all_refcnt() {
 		local SRC="$d/.ocarina_hidden/refcnt"
 		local DST="$target_base/$base/.ocarina_hidden/refcnt"
 
-		if $DRY_RUN; then
+		if [ "$DRY_RUN" = "true" ]; then
 			local out files
 			out="$(rsync -n --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1 || true)"
 			files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
@@ -885,7 +887,7 @@ verify_all_refcnt() {
 	shopt -u nullglob
 
 	echo
-	if $DRY_RUN; then
+	if [ "$DRY_RUN" = "true" ]; then
 		echo "Total files that would be compared: $(printf "%'d" "$total_verified_files")"
 		SUMMARY+=("Total files that would be compared: $(printf "%'d" "$total_verified_files")")
 	else
@@ -1082,16 +1084,16 @@ print_summary() {
 	echo "=== RUN SUMMARY ==="
 
 	# Mode detection
-	if $DRY_RUN; then
+	if [ "$DRY_RUN" = "true" ]; then
 		echo "✔ MODE: DRY-RUN"
-	elif $SCAN_ONLY; then
+	elif [ "$SCAN_ONLY" = "true" ]; then
 		echo "✔ MODE: SCAN-ONLY"
 	else
 		echo "✔ MODE: LIVE"
 	fi
 
 	# Checksum verification status
-	if $VERIFY_CHECKSUM; then
+	if [ "$VERIFY_CHECKSUM" = "true" ]; then
 		echo "✔ Checksum verification enabled"
 		SUMMARY+=("✔ Checksum verification enabled")
 	else
@@ -1100,8 +1102,8 @@ print_summary() {
 	fi
 
 	# Dry-run target availability (only relevant in dry-run)
-	if $DRY_RUN; then
-		if $DRY_HAS_TARGET; then
+	if [ "$DRY_RUN" = "true" ]; then
+		if [ "$DRY_HAS_TARGET" = "true" ]; then
 			echo "✔ Dry-run target available: true"
 			SUMMARY+=("✔ Dry-run target available: true")
 		else
@@ -1124,7 +1126,7 @@ confirm_live_run() {
 	echo
 
 	echo "✔ MODE: LIVE"
-	if $VERIFY_CHECKSUM; then
+	if [ "$VERIFY_CHECKSUM" = "true" ]; then
 		echo "✔ Checksum verification enabled"
 	else
 		echo "✘ Checksum verification not enabled"
@@ -1166,13 +1168,13 @@ main() {
 	parse_args "$@" # phase 1: detect flags, store args
 	setup_logging
 
-	if $SCAN_ONLY; then
+	if [ "$SCAN_ONLY" = "true" ]; then
 		echo
 		echo "=== RUN PREVIEW: SCAN-ONLY MODE ==="
 		echo
 		echo "✔ MODE: SCAN-ONLY"
 
-		if $VERIFY_CHECKSUM; then
+		if [ "$VERIFY_CHECKSUM" = "true" ]; then
 			echo "✔ Checksum verification enabled"
 		else
 			echo "✘ Checksum verification not enabled"
@@ -1184,13 +1186,13 @@ main() {
 		exit 0
 	fi
 
-	if $DRY_RUN; then
+		if [ "$DRY_RUN" = "true" ]; then
 		echo
 		echo "=== RUN PREVIEW: DRY-RUN MODE ==="
 		echo
 		echo "✔ MODE: DRY-RUN"
 
-		if $VERIFY_CHECKSUM; then
+		if [ "$VERIFY_CHECKSUM" = "true" ]; then
 			echo "✔ Checksum verification enabled"
 		else
 			echo "✘ Checksum verification not enabled"
@@ -1198,7 +1200,7 @@ main() {
 
 		decide_dryrun_target
 
-		if $DRY_HAS_TARGET; then
+		if [ "$DRY_HAS_TARGET" = "true" ]; then
 			echo "✔ Dry-run target available"
 			echo "Mountpoint: $MOUNTPOINT"
 		else
@@ -1214,10 +1216,11 @@ main() {
 
 		dry_run_preview
 
+		# Debug output
 		echo "[DEBUG] DRY_SKIP_SERVICES='$DRY_SKIP_SERVICES'"
 		echo "[DEBUG] DRY_HAS_TARGET='$DRY_HAS_TARGET'"
 
-		if [ "$DRY_SKIP_SERVICES" = false ]; then
+		if [ "$DRY_SKIP_SERVICES" = "false" ]; then
 			echo "[DEBUG] Entering start_services branch"
 			echo
 			echo "[DRY RUN] Simulating service restart ..."
@@ -1232,6 +1235,7 @@ main() {
 		print_summary
 		exit 0
 	fi
+
 
 	# --- LIVE RUN ---
 	setup_mountpoint
@@ -1263,7 +1267,7 @@ main() {
 		exit 1
 	}
 
-	if $VERIFY_CHECKSUM; then
+	if [ "$VERIFY_CHECKSUM" = "true" ]; then
 		verify_all_refcnt || {
 			echo "Verification failed. Aborting before any config changes."
 			print_summary
