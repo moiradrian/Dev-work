@@ -768,7 +768,10 @@ copy_all_refcnt() {
 	# Size planning & space check
 	local need="${SCAN_TOTAL_BYTES:-0}"
 	echo "Planned copy target base: $target_base"
-	check_free_space "$target_base" "$need" || return 1
+
+	# Space check should use the mountpoint, not the /ssd subdir
+	local base_mount="${MOUNTPOINT:-$target_base}"
+	check_free_space "$base_mount" "$need" || return 1
 	echo
 
 	# Build list of all refcount files (relative to $repo)
