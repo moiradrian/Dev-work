@@ -32,7 +32,15 @@ STOP_TIMEOUT=60           # seconds to wait for service to stop
 START_TIMEOUT=120         # seconds to wait for service startup
 START_POLL_INTERVAL=2     # seconds between state checks
 
+# ---- Colors ----
+RED=$'\033[31m'
+GREEN=$'\033[32m'
+YELLOW=$'\033[33m'
+CYAN=$'\033[36m'
+NC=$'\033[0m'   # reset
 
+
+# ---- Functions ----
 usage() {
 	echo "Usage: $0 [--dry-run] [--scan-only] [--checksum-verify] [MOUNTPOINT]"
 	echo
