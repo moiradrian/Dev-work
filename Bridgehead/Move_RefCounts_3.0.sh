@@ -27,6 +27,12 @@ DRY_HAS_TARGET=false # in dry-run: did user say the target is mounted?
 DRY_COPY_FILES=0
 DRY_COPY_BYTES=0
 
+# ---- Defaults ----
+STOP_TIMEOUT=60           # seconds to wait for service to stop
+START_TIMEOUT=120         # seconds to wait for service startup
+START_POLL_INTERVAL=2     # seconds between state checks
+
+
 usage() {
 	echo "Usage: $0 [--dry-run] [--scan-only] [--checksum-verify] [MOUNTPOINT]"
 	echo
