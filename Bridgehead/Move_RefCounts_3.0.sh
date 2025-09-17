@@ -26,6 +26,7 @@ BACKUP_FILE=""
 DRY_HAS_TARGET=false # in dry-run: did user say the target is mounted?
 DRY_COPY_FILES=0
 DRY_COPY_BYTES=0
+TEST_MODE=false
 
 # ---- Defaults ----
 STOP_TIMEOUT=60           # seconds to wait for service to stop
@@ -176,34 +177,36 @@ run_with_bar() {
 
 # ---- Arg parsing (phase 1 only: detect flags, save args) ----
 parse_args() {
-	local args=()
-	while [[ $# -gt 0 ]]; do
-		case "$1" in
-		--dry-run)
-			DRY_RUN=true
-			shift
-			;;
-		--scan-only)
-			SCAN_ONLY=true
-			shift
-			;;
-		--checksum-verify)
-			VERIFY_CHECKSUM=true
-			shift
-			;;
-		-h | --help)
-			usage
-			exit 0
-			;;
-		*)
-			args+=("$1")
-			shift
-			;;
-		esac
-	done
-
-	# Save non-flag args for later
-	PARSED_ARGS=("${args[@]}")
+    local args=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+        --dry-run)
+            DRY_RUN=true
+            shift
+            ;;
+        --scan-only)
+            SCAN_ONLY=true
+            shift
+            ;;
+        --checksum-verify)
+            VERIFY_CHECKSUM=true
+            shift
+            ;;
+        --test)  # hidden option
+            TEST_MODE=true
+            shift
+            ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        *)
+            args+=("$1")
+            shift
+            ;;
+        esac
+    done
+    PARSED_ARGS=("${args[@]}")
 }
 
 
