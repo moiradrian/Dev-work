@@ -1202,8 +1202,8 @@ main() {
 		wait_for_service_stop "ocards"
 		copy_all_refcnt || true
 		verify_all_refcnt || true
-		dry_run_preview
 		start_services
+		dry_run_preview
 		print_summary
 		exit 0
 	fi
