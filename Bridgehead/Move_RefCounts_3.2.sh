@@ -176,17 +176,18 @@ human_bytes() {
 }
 
 run_with_bar() {
-	local cmd=("$@")
-	"${cmd[@]}" 2>&1 | while IFS= read -r line; do
-		if [[ "$line" =~ ([0-9]+)% ]]; then
-			local pct="${BASH_REMATCH[1]}"
-			local bar_len=$((pct / 2)) # 50 chars = 100%
-			local bar=$(printf "%0.s#" $(seq 1 $bar_len))
-			printf "\r[%-50s] %3d%%" "$bar" "$pct"
-		fi
-	done
-	echo
+    local cmd=("$@")
+    "${cmd[@]}" 2>&1 | while IFS= read -r line; do
+        if [[ "$line" =~ ([0-9]+)% ]]; then
+            local pct="${BASH_REMATCH[1]}"
+            local bar_len=$((pct / 2)) # 50 chars = 100%
+            local bar=$(printf "%0.s#" $(seq 1 $bar_len))
+            printf "\r[%-50s] %3d%%" "$bar" "$pct"
+        fi
+    done
+    echo
 }
+
 
 debug_log() {
 	if [ "$DEBUG_MODE" = "true" ]; then
@@ -656,7 +657,7 @@ copy_one_refcnt() {
 		echo "[DRY RUN] rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
 
 		local out files
-		out="$(safe_rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1 || true)"
+		out="$(run_with_bar safe_rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1 || true)"
 		files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
 		: "${files:=0}"
 
@@ -799,7 +800,7 @@ copy_all_refcnt() {
 	if [ "$DRY_RUN" = "true" ]; then
 		RSYNC_ARGS+=(-n)
 		echo "[DRY RUN] rsync ${RSYNC_ARGS[*]} $repo/ $target_base/" >>"$LOG_FILE"
-		rsync "${RSYNC_ARGS[@]}" "$repo/" "$target_base/" | grep -E 'Number of regular files transferred'
+		run_with_bar rsync "${RSYNC_ARGS[@]}" "$repo/" "$target_base/" | grep -E 'Number of regular files transferred'
 		echo "Total files that would be copied: $(printf "%'d" "$planned_files")"
 		SUMMARY+=("Total files that would be copied: $(printf "%'d" "$planned_files")")
 		rm -f "$filelist"
@@ -809,7 +810,7 @@ copy_all_refcnt() {
 	# --- LIVE RUN ---
 	echo "[LIVE] rsync ${RSYNC_ARGS[*]} $repo/ $target_base/" >>"$LOG_FILE"
 
-	if rsync "${RSYNC_ARGS[@]}" "$repo/" "$target_base/"; then
+	if run_with_bar rsync "${RSYNC_ARGS[@]}" "$repo/" "$target_base/"; then
 		echo
 		banner "✔ Rsync completed" "$GREEN"
 		SUMMARY+=("${GREEN}✔ Rsync completed: $planned_files files planned${NC}")
