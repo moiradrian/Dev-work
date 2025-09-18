@@ -31,7 +31,7 @@ TEST_MODE="false"
 DEBUG_MODE="false"
 
 # ---- Defaults ----
-STOP_TIMEOUT=120       # seconds to wait for service to stop
+STOP_TIMEOUT=120      # seconds to wait for service to stop
 START_TIMEOUT=120     # seconds to wait for service startup
 START_POLL_INTERVAL=2 # seconds between state checks
 
@@ -55,9 +55,9 @@ usage() {
 }
 
 banner() {
-    local text="$1"
-    local color="${2:-$CYAN}" # default cyan if not given
-    echo "${BOLD}${color}=== ${text} ===${NC}"
+	local text="$1"
+	local color="${2:-$CYAN}" # default cyan if not given
+	echo "${BOLD}${color}=== ${text} ===${NC}"
 }
 
 decide_dryrun_target() {
@@ -195,12 +195,12 @@ debug_log() {
 }
 
 debug_printf() {
-    if [ "$DEBUG_MODE" = "true" ]; then
-        # First arg is format string, rest are parameters
-        local fmt="$1"
-        shift
-        printf "[DEBUG]$fmt\n" "$@"
-    fi
+	if [ "$DEBUG_MODE" = "true" ]; then
+		# First arg is format string, rest are parameters
+		local fmt="$1"
+		shift
+		printf "[DEBUG]$fmt\n" "$@"
+	fi
 }
 
 # ---- Arg parsing (phase 1 only: detect flags, save args) ----
@@ -379,106 +379,117 @@ verify_ready_to_stop() {
 }
 
 wait_for_service_stop() {
-    local service="$1"
-    local timeout="${2:-$STOP_TIMEOUT}"
+	local service="$1"
+	local timeout="${2:-$STOP_TIMEOUT}"
 
-    if [ "$DRY_RUN" = "true" ]; then
-        echo -e "${CYAN}=== DRY-RUN: STOPPING SERVICE '$service' ===${NC}"
-        echo -e "${YELLOW}[DRY RUN] Would stop service: $service${NC}"
-        echo "• Command: systemctl stop $service"
-        echo "• Condition: Wait until System State=Stopped and service inactive"
-        SUMMARY+=("[DRY RUN] Would stop service: $service")
-        return 0
-    fi
+	if [ "$DRY_RUN" = "true" ]; then
+		echo -e "${CYAN}=== DRY-RUN: STOPPING SERVICE '$service' ===${NC}"
+		echo -e "${YELLOW}[DRY RUN] Would stop service: $service${NC}"
+		echo "• Command: systemctl stop $service"
+		echo "• Condition: Wait until System State=Stopped and service inactive"
+		SUMMARY+=("[DRY RUN] Would stop service: $service")
+		return 0
+	fi
 
-    echo -e "${CYAN}=== STOPPING SERVICE '$service' ===${NC}"
-    systemctl stop "$service" || {
-        echo -e "${RED}✘ Failed to issue systemctl stop for $service${NC}"
-        SUMMARY+=("✘ Failed to issue stop for $service")
-        return 1
-    }
+	echo -e "${CYAN}=== STOPPING SERVICE '$service' ===${NC}"
+	systemctl stop "$service" || {
+		echo -e "${RED}✘ Failed to issue systemctl stop for $service${NC}"
+		SUMMARY+=("✘ Failed to issue stop for $service")
+		return 1
+	}
 
-    local start_ts=$(date +%s)
-    local last_state=""
+	local start_ts=$(date +%s)
+	local first_print=true
 
-    while true; do
-        local sys_state svc_state
-        sys_state=$(get_system_state 2>/dev/null || echo "unknown")
-        svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
+	while true; do
+		local sys_state svc_state
+		sys_state=$(get_system_state 2>/dev/null || echo "unknown")
+		svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
 
-        if [[ "$sys_state" != "$last_state" ]]; then
-            echo "System State : $sys_state"
-            echo "Service State: $svc_state"
-            last_state="$sys_state"
-        fi
+		if [ "$first_print" = true ]; then
+			echo "System State : $sys_state"
+			echo "Service State: $svc_state"
+			echo "Reason       : (not applicable when stopping)"
+			first_print=false
+		else
+			# Move cursor up 3 lines and overwrite them
+			printf "\033[3A"
+			printf "System State : %s\033[K\n" "$sys_state"
+			printf "Service State: %s\033[K\n" "$svc_state"
+			printf "Reason       : (not applicable when stopping)\033[K\n"
+		fi
 
-        if [[ "${sys_state,,}" == "stopped" || "$svc_state" == "inactive" ]]; then
-            echo -e "${GREEN}✔ Service '$service' stopped successfully.${NC}"
-            SUMMARY+=("✔ Service stopped: $service")
-            return 0
-        fi
+		if [[ "${sys_state,,}" == "stopped" || "$svc_state" == "inactive" ]]; then
+			echo -e "${GREEN}✔ Service '$service' stopped successfully.${NC}"
+			SUMMARY+=("✔ Service stopped: $service")
+			return 0
+		fi
 
-        if (( $(date +%s) - start_ts >= timeout )); then
-            echo -e "${RED}✘ Timeout waiting for '$service' to stop (>${timeout}s). Last state: $sys_state${NC}"
-            SUMMARY+=("✘ Stop timeout for $service (last=$sys_state)")
-            return 1
-        fi
+		if (($(date +%s) - start_ts >= timeout)); then
+			echo -e "${RED}✘ Timeout waiting for '$service' to stop (>${timeout}s). Last state: $sys_state${NC}"
+			SUMMARY+=("✘ Stop timeout for $service (last=$sys_state)")
+			return 1
+		fi
 
-        sleep 1
-    done
+		sleep 1
+	done
 }
 
 start_services() {
-    local service="ocards"
+	local service="ocards"
 
-    if [ "$DRY_RUN" = "true" ]; then
-        echo -e "${CYAN}=== DRY-RUN: STARTING SERVICE '$service' ===${NC}"
-        echo -e "${YELLOW}[DRY RUN] Would start service: $service${NC}"
-        echo "• Command: systemctl start $service"
-        echo "• Condition: Wait until System State=Operational Mode and Reason=Filesystem is fully operational for I/O."
-        SUMMARY+=("[DRY RUN] Would start service: $service")
-        return 0
-    fi
+	if [ "$DRY_RUN" = "true" ]; then
+		echo -e "${CYAN}=== DRY-RUN: STARTING SERVICE '$service' ===${NC}"
+		echo -e "${YELLOW}[DRY RUN] Would start service: $service${NC}"
+		echo "• Command: systemctl start $service"
+		echo "• Condition: Wait until System State=Operational Mode and Reason=Filesystem is fully operational for I/O."
+		SUMMARY+=("[DRY RUN] Would start service: $service")
+		return 0
+	fi
 
-    echo -e "${CYAN}=== STARTING SERVICE '$service' ===${NC}"
-    systemctl start "$service" || {
-        echo -e "${RED}✘ Failed to issue systemctl start for $service${NC}"
-        SUMMARY+=("✘ Failed to issue start for $service")
-        return 1
-    }
+	echo -e "${CYAN}=== STARTING SERVICE '$service' ===${NC}"
+	systemctl start "$service" || {
+		echo -e "${RED}✘ Failed to issue systemctl start for $service${NC}"
+		SUMMARY+=("✘ Failed to issue start for $service")
+		return 1
+	}
 
-    local start_ts=$(date +%s)
-    local last_state=""
-    local last_reason=""
+	local start_ts=$(date +%s)
+	local first_print=true
 
-    while true; do
-        local sys_state reason svc_state
-        sys_state=$(get_system_state 2>/dev/null || echo "unknown")
-        reason=$(get_system_reason 2>/dev/null || echo "unknown")
-        svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
+	while true; do
+		local sys_state reason svc_state
+		sys_state=$(get_system_state 2>/dev/null || echo "unknown")
+		reason=$(get_system_reason 2>/dev/null || echo "unknown")
+		svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
 
-        if [[ "$sys_state" != "$last_state" || "$reason" != "$last_reason" ]]; then
-            echo "System State : $sys_state"
-            echo "Service State: $svc_state"
-            echo "Reason       : $reason"
-            last_state="$sys_state"
-            last_reason="$reason"
-        fi
+		if [ "$first_print" = true ]; then
+			echo "System State : $sys_state"
+			echo "Service State: $svc_state"
+			echo "Reason       : $reason"
+			first_print=false
+		else
+			# Move cursor up 3 lines and overwrite them
+			printf "\033[3A"
+			printf "System State : %s\033[K\n" "$sys_state"
+			printf "Service State: %s\033[K\n" "$svc_state"
+			printf "Reason       : %s\033[K\n" "$reason"
+		fi
 
-        if [[ "$sys_state" == "Operational Mode" && "$reason" == "Filesystem is fully operational for I/O." && "$svc_state" == "active" ]]; then
-            echo -e "${GREEN}✔ Service '$service' is fully operational.${NC}"
-            SUMMARY+=("✔ Service started and operational: $service")
-            return 0
-        fi
+		if [[ "$sys_state" == "Operational Mode" && "$reason" == "Filesystem is fully operational for I/O." && "$svc_state" == "active" ]]; then
+			echo -e "${GREEN}✔ Service '$service' is fully operational.${NC}"
+			SUMMARY+=("✔ Service started and operational: $service")
+			return 0
+		fi
 
-        if (( $(date +%s) - start_ts >= START_TIMEOUT )); then
-            echo -e "${RED}✘ Timeout waiting for '$service' to start (>${START_TIMEOUT}s). Last state: $sys_state, reason: $reason${NC}"
-            SUMMARY+=("✘ Start timeout for $service (last sys=$sys_state, reason=$reason)")
-            return 1
-        fi
+		if (($(date +%s) - start_ts >= START_TIMEOUT)); then
+			echo -e "${RED}✘ Timeout waiting for '$service' to start (>${START_TIMEOUT}s). Last state: $sys_state, reason: $reason${NC}"
+			SUMMARY+=("✘ Start timeout for $service (last sys=$sys_state, reason=$reason)")
+			return 1
+		fi
 
-        sleep 2
-    done
+		sleep 2
+	done
 }
 
 plan_copy_totals() {
