@@ -176,18 +176,65 @@ human_bytes() {
 }
 
 run_with_bar() {
-    local cmd=("$@")
-    "${cmd[@]}" 2>&1 | while IFS= read -r line; do
-        if [[ "$line" =~ ([0-9]+)% ]]; then
-            local pct="${BASH_REMATCH[1]}"
-            local bar_len=$((pct / 2)) # 50 chars = 100%
-            local bar=$(printf "%0.s#" $(seq 1 $bar_len))
-            printf "\r[%-50s] %3d%%" "$bar" "$pct"
-        fi
-    done
-    echo
+	local dry_mode="false"
+	local cmd=("$@")
+
+	# detect dry-run flag in args
+	for arg in "${cmd[@]}"; do
+		if [[ "$arg" == "-n" || "$arg" == "--dry-run" ]]; then
+			dry_mode="true"
+			break
+		fi
+	done
+
+	if [ "$dry_mode" = "true" ]; then
+		debug_log "run_with_bar: dry-run detected, simulating progress bar"
+
+		# Run command quietly just for stats
+		local out
+		out="$("${cmd[@]}" 2>&1 || true)"
+
+		local total
+		total="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
+		: "${total:=100}"
+
+		local i=0
+		while ((i <= total)); do
+			local pct=$((i * 100 / total))
+			local bar_len=$((pct / 2))
+			local bar=$(printf "%0.s#" $(seq 1 $bar_len))
+			printf "\r[%-50s] %3d%% (simulated)" "$bar" "$pct"
+			sleep 0.02
+			((i += (total / 20 > 0 ? total / 20 : 1)))
+		done
+		echo
+		printf "%s\n" "$out"
+
+	else
+		debug_log "run_with_bar: live mode, parsing progress"
+		"${cmd[@]}" 2>&1 | while IFS= read -r line; do
+			if [[ "$line" =~ ([0-9]+)% ]]; then
+				local pct="${BASH_REMATCH[1]}"
+				local bar_len=$((pct / 2))
+				local bar=$(printf "%0.s#" $(seq 1 $bar_len))
+				printf "\r[%-50s] %3d%%" "$bar" "$pct"
+			fi
+			echo "$line"
+		done
+		echo
+	fi
 }
 
+simulate_bar() {
+	while true; do
+		for pct in 0 20 40 60 80 100; do
+			local bar_len=$((pct / 2)) # 50 chars = 100%
+			local bar=$(printf "%0.s#" $(seq 1 $bar_len))
+			printf "\r[%-50s] %3d%% (simulated)" "$bar" "$pct"
+			sleep 0.2
+		done
+	done
+}
 
 debug_log() {
 	if [ "$DEBUG_MODE" = "true" ]; then
@@ -649,17 +696,28 @@ copy_one_refcnt() {
 	fi
 
 	local -a RSYNC_ARGS
-	IFS=$'\n' read -r -d '' -a RSYNC_ARGS < <(rsync_base_flags && printf '\0')
-	RSYNC_ARGS+=(--stats --info=progress2)
-
 	if [ "$DRY_RUN" = "true" ]; then
-		RSYNC_ARGS+=(-n)
-		echo "[DRY RUN] rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
+		# DRY-RUN uses original array logic
+		IFS=$'\n' read -r -d '' -a RSYNC_ARGS < <(rsync_base_flags && printf '\0')
+		RSYNC_ARGS+=(--stats -n)
 
-		local out files
-		out="$(run_with_bar safe_rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1 || true)"
-		files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
+		echo "[DRY RUN] rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
+		echo "[DRY RUN] Scanning files, please wait..."
+		simulate_bar &
+		BAR_PID=$!
+
+		local tmpfile
+		tmpfile="$(mktemp)"
+		rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" >"$tmpfile" 2>&1 || true
+
+		kill "$BAR_PID" 2>/dev/null
+		wait "$BAR_PID" 2>/dev/null || true
+		echo
+
+		local files
+		files="$(awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}' "$tmpfile")"
 		: "${files:=0}"
+		rm -f "$tmpfile"
 
 		printf "Directory %s: %'d files would be copied\n" "$base" "$files"
 		SUMMARY+=("Directory $base: $files files would be copied")
@@ -670,6 +728,9 @@ copy_one_refcnt() {
 	fi
 
 	# --- LIVE RUN ---
+	mapfile -t RSYNC_ARGS < <(rsync_base_flags)
+	RSYNC_ARGS+=(--stats --info=progress2)
+
 	echo "[LIVE] rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
 
 	local tmpfile
@@ -756,7 +817,7 @@ copy_all_refcnt() {
 		return 1
 	}
 
-	# --- DRY-RUN without target: plan-only mode ---
+	# --- DRY-RUN without target ---
 	if [ "$DRY_RUN" = "true" ] && [ "$DRY_HAS_TARGET" != "true" ]; then
 		echo
 		echo "[DRY RUN] Plan-only mode (no target)."
@@ -778,29 +839,42 @@ copy_all_refcnt() {
 		return 1
 	fi
 
-	# Size planning & space check
 	local need="${SCAN_TOTAL_BYTES:-0}"
 	echo "Planned copy target base: $target_base"
 
-	# Space check should use the mountpoint, not the /ssd subdir
 	local base_mount="${MOUNTPOINT:-$target_base}"
 	check_free_space "$base_mount" "$need" || return 1
 	echo
 
-	# Build list of all refcount files (relative to $repo)
 	local filelist
 	filelist="$(mktemp)"
+	echo "[INFO] Building refcnt file list, this may take a while..."
 	(cd "$repo" && find . -type f -path "*/.ocarina_hidden/refcnt/*") >"$filelist"
+	echo "[INFO] File list built: $(wc -l <"$filelist") files queued for rsync"
+	echo
 
-	# Rsync args
 	local -a RSYNC_ARGS
-	IFS=$'\n' read -r -d '' -a RSYNC_ARGS < <(rsync_base_flags && printf '\0')
-	RSYNC_ARGS+=(--files-from="$filelist" --stats --info=progress2)
-
 	if [ "$DRY_RUN" = "true" ]; then
-		RSYNC_ARGS+=(-n)
+		# DRY-RUN
+		IFS=$'\n' read -r -d '' -a RSYNC_ARGS < <(rsync_base_flags && printf '\0')
+		RSYNC_ARGS+=(--files-from="$filelist" --stats -n)
+
 		echo "[DRY RUN] rsync ${RSYNC_ARGS[*]} $repo/ $target_base/" >>"$LOG_FILE"
-		run_with_bar rsync "${RSYNC_ARGS[@]}" "$repo/" "$target_base/" | grep -E 'Number of regular files transferred'
+		echo "[DRY RUN] Scanning all refcnt files, please wait..."
+		simulate_bar &
+		BAR_PID=$!
+
+		local tmpfile
+		tmpfile="$(mktemp)"
+		rsync "${RSYNC_ARGS[@]}" "$repo/" "$target_base/" >"$tmpfile" 2>&1 || true
+
+		kill "$BAR_PID" 2>/dev/null
+		wait "$BAR_PID" 2>/dev/null || true
+		printf "\r[%-50s] %3d%% (simulated)\n" "##################################################" 100
+
+		awk -F': ' '/Number of regular files transferred/ {print $0}' "$tmpfile"
+		rm -f "$tmpfile"
+
 		echo "Total files that would be copied: $(printf "%'d" "$planned_files")"
 		SUMMARY+=("Total files that would be copied: $(printf "%'d" "$planned_files")")
 		rm -f "$filelist"
@@ -808,6 +882,9 @@ copy_all_refcnt() {
 	fi
 
 	# --- LIVE RUN ---
+	mapfile -t RSYNC_ARGS < <(rsync_base_flags)
+	RSYNC_ARGS+=(--files-from="$filelist" --stats --info=progress2)
+
 	echo "[LIVE] rsync ${RSYNC_ARGS[*]} $repo/ $target_base/" >>"$LOG_FILE"
 
 	if run_with_bar rsync "${RSYNC_ARGS[@]}" "$repo/" "$target_base/"; then
