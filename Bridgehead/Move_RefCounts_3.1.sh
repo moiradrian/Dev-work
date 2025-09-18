@@ -57,7 +57,6 @@ usage() {
 banner() {
     local text="$1"
     local color="${2:-$CYAN}" # default cyan if not given
-    echo
     echo "${BOLD}${color}=== ${text} ===${NC}"
 }
 
@@ -334,10 +333,10 @@ setup_logging() {
 
 	banner "Dry run: $DRY_RUN" "$YELLOW"
 	banner "Scan only: $SCAN_ONLY" "$YELLOW"
-	banner "Verify checksum: $VERIFY_CHECKSUM" "$GREEN"
+	banner "Verify checksum: $VERIFY_CHECKSUM" "$YELLOW"
 
 	if [ "$DRY_RUN" = "true" ]; then
-		banner "✔ Dry-run target available: $DRY_HAS_TARGET" "$GREEN"
+		banner "Dry-run target available: $DRY_HAS_TARGET" "$YELLOW"
 	fi
 
 	if [ "$SCAN_ONLY" != "true" ]; then
@@ -370,7 +369,7 @@ verify_ready_to_stop() {
 
 	if [ "$DRY_RUN" = "true" ]; then
 		banner "[DRY RUN] Would proceed to stop service: $service" "$YELLOW"
-		SUMMARY+=("${GREEN}✔ DRY-RUN: would stop ${service} (precheck OK)$(NC)")
+		SUMMARY+=("${GREEN}✔ DRY-RUN: would stop ${service} (precheck OK)${NC}")
 		return 0
 	fi
 
@@ -766,11 +765,11 @@ verify_one_refcnt() {
 
 	# At this point, directories match
 	if [ "$VERIFY_CHECKSUM" = "true" ]; then
-		echo "✔ Verified OK (checksum): $SRC -> $DST"
-		SUMMARY+=("✔ Verified OK (checksum): $SRC -> $DST")
+		banner "✔ Verified OK (checksum): $SRC -> $DST" "$GREEN"
+		SUMMARY+=("${GREEN}✔ Verified OK (checksum): $SRC -> $DST${NC}")
 	else
-		echo "✔ Verified OK (size/time): $SRC -> $DST"
-		SUMMARY+=("✔ Verified OK (size/time): $SRC -> $DST")
+		banner "✔ Verified OK (size/time): $SRC -> $DST" "$GREEN"
+		SUMMARY+=("${GREEN}✔ Verified OK (size/time): $SRC -> $DST${NC}")
 	fi
 	return 0
 }
@@ -843,8 +842,8 @@ copy_all_refcnt() {
 
 	if rsync "${RSYNC_ARGS[@]}" "$repo/" "$target_base/"; then
 		echo
-		echo "✔ Rsync completed"
-		SUMMARY+=("✔ Rsync completed: $planned_files files planned")
+		banner "✔ Rsync completed" "$GREEN"
+		SUMMARY+=("${GREEN}✔ Rsync completed: $planned_files files planned${NC}")
 		COPIED_FILES="$planned_files"
 		rm -f "$filelist"
 		return 0
@@ -866,7 +865,7 @@ verify_all_refcnt() {
 	local target_base="${NEW_LINE#export TGTSSDDIR=}"
 	target_base="${target_base%/}"
 	if [[ -z "$target_base" || "$target_base" == "export TGTSSDDIR=" ]]; then
-		echo "Error: Target base (TGTSSDDIR) not set; aborting verify."
+		banner "Error: Target base (TGTSSDDIR) not set; aborting verify." "$RED"
 		return 1
 	fi
 
@@ -924,7 +923,7 @@ verify_all_refcnt() {
 		SUMMARY+=("Total files that would be compared: $(printf "%'d" "$total_verified_files")")
 	else
 		echo "Total files verified: $(printf "%'d" "$total_verified_files")"
-		SUMMARY+=("✔ Verify OK for $verified trees, $total_verified_files files")
+		SUMMARY+=("${GREEN}✔ Verify OK for $verified trees, $total_verified_files files${NC}")
 	fi
 
 	return 0
@@ -935,17 +934,17 @@ config_preview_live() {
 	banner "=== LIVE CONFIG PREVIEW ===" "$GREEN"
 	echo "Would insert after 'export TGTDIR':"
 	echo "  $NEW_LINE"
-	SUMMARY+=("✔ Would insert (live preview): $NEW_LINE")
+	SUMMARY+=("${GREEN}✔ Would insert (live preview): $NEW_LINE${NC}")
 
 	if grep -q "^$REFCNT_OLD" "$CONFIG_FILE"; then
 		echo
 		echo "Would also change:"
 		echo "  $REFCNT_OLD"
 		echo "  → $REFCNT_NEW"
-		SUMMARY+=("✔ Would change (live preview): $REFCNT_OLD → $REFCNT_NEW")
+		SUMMARY+=("${GREEN}✔ Would change (live preview): $REFCNT_OLD → $REFCNT_NEW${NC}")
 	else
-		echo "No PLATFORM_DS_REFCNTS_ON_SSD=0 line found, no change made there."
-		SUMMARY+=("✘ No PLATFORM_DS_REFCNTS_ON_SSD=0 found (live preview)")
+		banner "No PLATFORM_DS_REFCNTS_ON_SSD=0 line found, no change made there." "$RED"
+		SUMMARY+=("${RED}✘ No PLATFORM_DS_REFCNTS_ON_SSD=0 found (live preview)${NC}")
 	fi
 }
 
@@ -998,26 +997,26 @@ dry_run_preview() {
 		# substitute placeholder if no mountpoint in dry-run
 		preview_line="export TGTSSDDIR=<YOUR_MOUNTPOINT>/ssd/"
 		echo
-		echo "[DRY RUN] No target mount available — previewing config changes with placeholder:"
+		banner "[DRY RUN] No target mount available — previewing config changes with placeholder:" "$YELLOW"
 		echo "  $preview_line"
-		SUMMARY+=("✔ Config preview with placeholder TGTSSDDIR (target not mounted)")
+		SUMMARY+=("${GREEN}✔ Config preview with placeholder TGTSSDDIR (target not mounted)${NC}")
 	fi
 
 	echo
 	banner "=== DRY-RUN CONFIG PREVIEW ===" "$YELLOW"
 	echo "[DRY RUN] Would insert after 'export TGTDIR':"
 	echo "  $preview_line"
-	SUMMARY+=("✔ Would insert: $preview_line")
+	SUMMARY+=("${GREEN}✔ Would insert: $preview_line${NC}")
 
 	if grep -q "^$REFCNT_OLD" "$CONFIG_FILE"; then
 		echo
 		echo "[DRY RUN] Would also change:"
 		echo "  $REFCNT_OLD"
 		echo "  → $REFCNT_NEW"
-		SUMMARY+=("✔ Would change: $REFCNT_OLD → $REFCNT_NEW")
+		SUMMARY+=("${GREEN}✔ Would change: $REFCNT_OLD → $REFCNT_NEW${NC}")
 	else
-		echo "[DRY RUN] No PLATFORM_DS_REFCNTS_ON_SSD=0 line found, no change made there."
-		SUMMARY+=("✘ No PLATFORM_DS_REFCNTS_ON_SSD=0 found")
+		banner "[DRY RUN] No PLATFORM_DS_REFCNTS_ON_SSD=0 line found, no change made there." "$YELLOW"
+		SUMMARY+=("${RED}✘ No PLATFORM_DS_REFCNTS_ON_SSD=0 found${NC}")
 	fi
 
 	echo
@@ -1117,8 +1116,8 @@ apply_changes() {
 
 	# Compare old vs new before replacing
 	if cmp -s "$CONFIG_FILE" "${CONFIG_FILE}.tmp"; then
-		echo "✔ Config already up-to-date. No changes made."
-		SUMMARY+=("✔ Config already up-to-date (no changes required)")
+		banner "✔ Config already up-to-date. No changes made."
+		SUMMARY+=("${GREEN}✔ Config already up-to-date (no changes required)${NC}")
 		rm -f "${CONFIG_FILE}.tmp"
 		return 0
 	fi
@@ -1126,12 +1125,12 @@ apply_changes() {
 	# Replace config with updated version
 	mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
 
-	echo "✔ Config updated."
-	SUMMARY+=("✔ Config updated: $CONFIG_FILE")
+	banner "✔ Config updated." "$GREEN"
+	SUMMARY+=("${GREEN}✔ Config updated: $CONFIG_FILE${NC}")
 
 	if grep -q "^$REFCNT_NEW" "$CONFIG_FILE"; then
-		echo "✔ Updated: $REFCNT_OLD → $REFCNT_NEW"
-		SUMMARY+=("✔ Updated: $REFCNT_OLD → $REFCNT_NEW")
+		banner "✔ Updated: $REFCNT_OLD → $REFCNT_NEW" "$GREEN"
+		SUMMARY+=("${GREEN}✔ Updated: $REFCNT_OLD → $REFCNT_NEW${NC}")
 	fi
 
 	echo
@@ -1145,30 +1144,30 @@ print_summary() {
 
 	# Mode detection
 	if [ "$DRY_RUN" = "true" ]; then
-		echo "✔ MODE: DRY-RUN"
+		banner "✔ MODE: DRY-RUN" "$YELLOW"
 	elif [ "$SCAN_ONLY" = "true" ]; then
-		echo "✔ MODE: SCAN-ONLY"
+		banner "✔ MODE: SCAN-ONLY" "$BLUE"
 	else
-		echo "✔ MODE: LIVE"
+		banner "✔ MODE: LIVE" "$GREEN"
 	fi
 
 	# Checksum verification status
 	if [ "$VERIFY_CHECKSUM" = "true" ]; then
-		echo "✔ Checksum verification enabled"
-		SUMMARY+=("✔ Checksum verification enabled")
+		banner "✔ Checksum verification enabled" "$GREEN"
+		SUMMARY+=("${GREEN}✔ Checksum verification enabled${NC}")
 	else
-		echo "✘ Checksum verification not enabled"
-		SUMMARY+=("✘ Checksum verification not enabled")
+		banner "✘ Checksum verification not enabled" "$RED"
+		SUMMARY+=("${RED}✘ Checksum verification not enabled${NC}")
 	fi
 
 	# Dry-run target availability (only relevant in dry-run)
 	if [ "$DRY_RUN" = "true" ]; then
 		if [ "$DRY_HAS_TARGET" = "true" ]; then
-			echo "✔ Dry-run target available: true"
-			SUMMARY+=("✔ Dry-run target available: true")
+			banner "✔ Dry-run target available: true" "$GREEN"
+			SUMMARY+=("${GREEN}✔ Dry-run target available: true${NC}")
 		else
-			echo "✘ Dry-run target available: false"
-			SUMMARY+=("✘ Dry-run target available: false")
+			banner "✘ Dry-run target available: false" "$RED"
+			SUMMARY+=("${RED}✘ Dry-run target available: false${NC}")
 		fi
 	fi
 
@@ -1214,7 +1213,7 @@ confirm_live_run() {
 
 	read -rp "${RED}Proceed with LIVE run? Type 'yes' to continue, anything else will cancel: ${NC}" reply
 	if [[ "$reply" == "yes" ]]; then
-		echo "✔ Continuing with LIVE run..."
+		banner "✔ Continuing with LIVE run..." "$GREEN"
 	else
 		echo "✘ Cancelled by user."
 		SUMMARY=("${RED}✘ CANCELLED at confirmation step" "${SUMMARY[@]}${NC}")
