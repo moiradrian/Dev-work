@@ -190,7 +190,7 @@ run_with_bar() {
 	if [ "$dry_mode" = "true" ]; then
 		debug_log "run_with_bar: dry-run detected, simulating progress bar"
 
-		# Run command quietly just for stats
+		# Run rsync quietly just for stats
 		local out
 		out="$("${cmd[@]}" 2>&1 || true)"
 
@@ -202,7 +202,8 @@ run_with_bar() {
 		while ((i <= total)); do
 			local pct=$((i * 100 / total))
 			local bar_len=$((pct / 2))
-			local bar=$(printf "%0.s#" $(seq 1 $bar_len))
+			local bar
+			bar=$(printf "%0.s#" $(seq 1 $bar_len))
 			printf "\r[%-50s] %3d%% (simulated)" "$bar" "$pct"
 			sleep 0.02
 			((i += (total / 20 > 0 ? total / 20 : 1)))
@@ -211,15 +212,20 @@ run_with_bar() {
 		printf "%s\n" "$out"
 
 	else
-		debug_log "run_with_bar: live mode, parsing progress"
-		"${cmd[@]}" 2>&1 | while IFS= read -r line; do
+		debug_log "run_with_bar: live mode, custom bar only"
+		# Force line buffering and suppress rsync's native bar
+		stdbuf -oL "${cmd[@]}" 2>&1 | while IFS= read -r line; do
 			if [[ "$line" =~ ([0-9]+)% ]]; then
 				local pct="${BASH_REMATCH[1]}"
 				local bar_len=$((pct / 2))
-				local bar=$(printf "%0.s#" $(seq 1 $bar_len))
+				local bar
+				bar=$(printf "%0.s#" $(seq 1 $bar_len))
 				printf "\r[%-50s] %3d%%" "$bar" "$pct"
 			fi
-			echo "$line"
+			# Only show "final summary" lines (skip rsync progress chatter)
+			if [[ ! "$line" =~ % ]]; then
+				echo "$line"
+			fi
 		done
 		echo
 	fi
