@@ -302,11 +302,11 @@ setup_mountpoint() {
 		if [ "$DRY_RUN" != "true" ]; then
 			if [[ ! -d "${MOUNTPOINT}/ssd" ]]; then
 				mkdir -p "${MOUNTPOINT}/ssd"
-				echo "Created directory: ${MOUNTPOINT}/ssd"
+				banner "Created directory: ${MOUNTPOINT}/ssd" "$GREEN"
 			fi
 		fi
 
-		SUMMARY+=("✔ Using target SSD directory: ${MOUNTPOINT}/ssd/")
+		SUMMARY+=("${GREEN}✔ Using target SSD directory: ${MOUNTPOINT}/ssd/${NC}")
 		break
 	done
 }
@@ -486,7 +486,7 @@ start_services() {
 		echo "• Wait strategy     : poll until 'Reason=Filesystem is fully operational for I/O.' and service active (timeout ${START_TIMEOUT}s)"
 
 		echo -e "${GREEN}✔ Dry-run start simulation complete.${NC}"
-		SUMMARY+=("✔ DRY-RUN: would start ${service} (simulated)")
+		SUMMARY+=("${GREEN}✔ DRY-RUN: would start ${service} (simulated)${NC}")
 		return 0
 	fi
 
