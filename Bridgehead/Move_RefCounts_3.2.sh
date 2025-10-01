@@ -176,59 +176,100 @@ human_bytes() {
 }
 
 run_with_bar() {
-	local dry_mode="false"
-	local cmd=("$@")
+	# Args: the exact rsync (or other) command + flags to run
+	local -a cmd=("$@")
 
-	# detect dry-run flag in args
-	for arg in "${cmd[@]}"; do
-		if [[ "$arg" == "-n" || "$arg" == "--dry-run" ]]; then
-			dry_mode="true"
-			break
-		fi
+	# Detect dry-run
+	local dry=false
+	for a in "${cmd[@]}"; do
+		[[ "$a" == "-n" || "$a" == "--dry-run" ]] && dry=true
 	done
 
-	if [ "$dry_mode" = "true" ]; then
-		debug_log "run_with_bar: dry-run detected, simulating progress bar"
+	# Save shell strictness and relax inside this function
+	local _had_errexit=0 _had_pipefail=0
+	if [[ $- == *e* ]]; then
+		_had_errexit=1
+		set +e
+	fi
+	if shopt -qo pipefail; then
+		_had_pipefail=1
+		set +o pipefail
+	fi
 
-		# Run rsync quietly just for stats
-		local out
+	if "$dry"; then
+		# DRY-RUN: run once, simulate bar from stats
+		local out total i pct bar_len bar
 		out="$("${cmd[@]}" 2>&1 || true)"
-
-		local total
 		total="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
 		: "${total:=100}"
 
-		local i=0
+		i=0
 		while ((i <= total)); do
-			local pct=$((i * 100 / total))
-			local bar_len=$((pct / 2))
-			local bar
+			pct=$((i * 100 / total))
+			bar_len=$((pct / 2))
 			bar=$(printf "%0.s#" $(seq 1 $bar_len))
 			printf "\r[%-50s] %3d%% (simulated)" "$bar" "$pct"
 			sleep 0.02
 			((i += (total / 20 > 0 ? total / 20 : 1)))
 		done
-		echo
+		printf "\r[%-50s] %3d%% (simulated)\n\n" "##################################################" 100
 		printf "%s\n" "$out"
 
-	else
-		debug_log "run_with_bar: live mode, custom bar only"
-		# Force line buffering and suppress rsync's native bar
-		stdbuf -oL "${cmd[@]}" 2>&1 | while IFS= read -r line; do
-			if [[ "$line" =~ ([0-9]+)% ]]; then
-				local pct="${BASH_REMATCH[1]}"
-				local bar_len=$((pct / 2))
-				local bar
-				bar=$(printf "%0.s#" $(seq 1 $bar_len))
-				printf "\r[%-50s] %3d%%" "$bar" "$pct"
-			fi
-			# Only show "final summary" lines (skip rsync progress chatter)
-			if [[ ! "$line" =~ % ]]; then
-				echo "$line"
-			fi
-		done
-		echo
+		((_had_pipefail)) && set -o pipefail
+		((_had_errexit)) && set -e
+		return 0
 	fi
+
+	# LIVE: write rsync output to a temp file and follow it
+	local tmp
+	tmp="$(mktemp)"
+
+	# Start rsync (line-buffered) -> tmp
+	stdbuf -oL -eL "${cmd[@]}" >"$tmp" 2>&1 &
+	local rsync_pid=$!
+
+	# Reader: follow tmp until *rsync* exits; show only the bar
+	{
+		local line pct last_pct=-1 bar_len bar
+		# --pid makes tail exit when rsync exits; tr turns \r into \n so we see updates
+		tail -n +1 -F "$tmp" --pid="$rsync_pid" 2>/dev/null |
+			tr '\r' '\n' |
+			while IFS= read -r line; do
+				if [[ "$line" =~ ([0-9]{1,3})% ]]; then
+					pct="${BASH_REMATCH[1]}"
+					((pct < 0)) && pct=0
+					((pct > 100)) && pct=100
+					if ((pct != last_pct)); then
+						bar_len=$((pct / 2))
+						bar=$(printf "%0.s#" $(seq 1 $bar_len))
+						printf "\r[%-50s] %3d%%" "$bar" "$pct"
+						last_pct=$pct
+					fi
+				fi
+			done
+	} &
+	local reader_pid=$!
+
+	# Wait for rsync, then for reader (reader exits automatically via --pid)
+	wait "$rsync_pid"
+	local rsync_rc=$?
+	wait "$reader_pid" 2>/dev/null || true
+
+	# Freeze the bar at 100% and ensure a blank line before summary/banners
+	printf "\r[%-50s] %3d%%\n\n" "##################################################" 100
+
+	# Print rsync summary once (no % lines)
+	grep -v '%' "$tmp" || true
+	rm -f "$tmp"
+
+	# Extra newline so your next banner never sticks to the bar or summary
+	echo
+
+	# Restore shell strictness
+	((_had_pipefail)) && set -o pipefail
+	((_had_errexit)) && set -e
+
+	return "$rsync_rc"
 }
 
 simulate_bar() {
@@ -440,48 +481,41 @@ wait_for_service_stop() {
 		echo -e "${CYAN}=== DRY-RUN: STOPPING SERVICE '$service' ===${NC}"
 		echo -e "${YELLOW}[DRY RUN] Would stop service: $service${NC}"
 		echo "• Command: systemctl stop $service"
-		echo "• Condition: Wait until System State=Stopped and service inactive"
+		echo "• Condition: Wait until System State=Stopped"
 		SUMMARY+=("[DRY RUN] Would stop service: $service")
 		return 0
 	fi
 
 	echo -e "${CYAN}=== STOPPING SERVICE '$service' ===${NC}"
-	systemctl stop "$service" || {
+	if ! systemctl stop "$service" 2>/dev/null; then
 		echo -e "${RED}✘ Failed to issue systemctl stop for $service${NC}"
 		SUMMARY+=("✘ Failed to issue stop for $service")
 		return 1
-	}
+	fi
 
 	local start_ts=$(date +%s)
-	local first_print=true
+	local sys_state
 
-	while true; do
-		local sys_state svc_state
-		sys_state=$(get_system_state 2>/dev/null || echo "unknown")
-		svc_state=$(systemctl is-active "$service" 2>/dev/null || echo "unknown")
+	# Print initial line
+	sys_state=$(get_system_state 2>/dev/null || printf "unknown")
+	printf "System State : %s\n" "$sys_state"
 
-		if [ "$first_print" = true ]; then
-			echo "System State : $sys_state"
-			echo "Service State: $svc_state"
-			echo "Reason       : (not applicable when stopping)"
-			first_print=false
-		else
-			# Move cursor up 3 lines and overwrite them
-			printf "\033[3A"
-			printf "System State : %s\033[K\n" "$sys_state"
-			printf "Service State: %s\033[K\n" "$svc_state"
-			printf "Reason       : (not applicable when stopping)\033[K\n"
-		fi
+	while :; do
+		sys_state=$(get_system_state 2>/dev/null || printf "unknown")
 
-		if [[ "${sys_state,,}" == "stopped" || "$svc_state" == "inactive" ]]; then
-			echo -e "${GREEN}✔ Service '$service' stopped successfully.${NC}"
-			SUMMARY+=("✔ Service stopped: $service")
+		# overwrite the line in-place
+		printf "\033[1A" # move cursor up one line
+		printf "System State : %s\033[K\n" "$sys_state"
+
+		if [[ "$sys_state" == "Stopped" ]]; then
+			echo -e "${GREEN}✔ Service '$service' stopped (System State=Stopped).${NC}"
+			SUMMARY+=("${GREEN}✔ Service stopped: $service (System State=Stopped).${NC}")
 			return 0
 		fi
 
 		if (($(date +%s) - start_ts >= timeout)); then
-			echo -e "${RED}✘ Timeout waiting for '$service' to stop (>${timeout}s). Last state: $sys_state${NC}"
-			SUMMARY+=("✘ Stop timeout for $service (last=$sys_state)")
+			echo -e "${RED}✘ Timeout waiting for '$service' to stop (> ${timeout}s). Last state: $sys_state${NC}"
+			SUMMARY+=("✘ Stop timeout for $service (last state=$sys_state)")
 			return 1
 		fi
 
@@ -532,13 +566,13 @@ start_services() {
 
 		if [[ "$sys_state" == "Operational Mode" && "$reason" == "Filesystem is fully operational for I/O." && "$svc_state" == "active" ]]; then
 			echo -e "${GREEN}✔ Service '$service' is fully operational.${NC}"
-			SUMMARY+=("✔ Service started and operational: $service")
+			SUMMARY+=("${GREEN}✔ Service started and operational: $service${NC}")
 			return 0
 		fi
 
 		if (($(date +%s) - start_ts >= START_TIMEOUT)); then
 			echo -e "${RED}✘ Timeout waiting for '$service' to start (>${START_TIMEOUT}s). Last state: $sys_state, reason: $reason${NC}"
-			SUMMARY+=("✘ Start timeout for $service (last sys=$sys_state, reason=$reason)")
+			SUMMARY+=("${RED}✘ Start timeout for $service (last sys=$sys_state, reason=$reason)${NC}")
 			return 1
 		fi
 
@@ -626,8 +660,8 @@ scan_refcnt_sizes() {
 	shopt -u nullglob
 
 	if ((found == 0)); then
-		echo "No integer-named directories with refcnt found under $repo."
-		SUMMARY+=("✘ Scan: 0 integer dirs found under $repo")
+		echo "${RED}No integer-named directories with refcnt found under $repo.${NC}"
+		SUMMARY+=("${RED}✘ Scan: 0 integer dirs found under $repo${NC}")
 		return 0
 	fi
 
@@ -637,8 +671,8 @@ scan_refcnt_sizes() {
 	echo "Total Refcount Size: $grand_human"
 	echo
 
-	SUMMARY+=("✔ Scan: $found integer dirs under $repo")
-	SUMMARY+=("✔ Total Refcount Size: $grand_human")
+	SUMMARY+=("${GREEN}✔ Scan: $found integer dirs under $repo${NC}")
+	SUMMARY+=("${GREEN}✔ Total Refcount Size: $grand_human${NC}")
 
 	SCAN_FOUND="$found"
 	SCAN_TOTAL_BYTES="$total_bytes"
@@ -738,6 +772,10 @@ copy_one_refcnt() {
 	RSYNC_ARGS+=(--stats --info=progress2)
 
 	echo "[LIVE] rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
+
+	local src_count
+	src_count=$(find "$SRC" -type f 2>/dev/null | wc -l | awk '{print $1+0}')
+	echo "[INFO] Copying $(printf "%'d" "$src_count") files from $SRC to $DST ..."
 
 	local tmpfile
 	tmpfile="$(mktemp)"
@@ -892,7 +930,7 @@ copy_all_refcnt() {
 	RSYNC_ARGS+=(--files-from="$filelist" --stats --info=progress2)
 
 	echo "[LIVE] rsync ${RSYNC_ARGS[*]} $repo/ $target_base/" >>"$LOG_FILE"
-
+	echo "[INFO] Copying $(printf "%'d" "$planned_files") files to $target_base ..."
 	if run_with_bar rsync "${RSYNC_ARGS[@]}" "$repo/" "$target_base/"; then
 		echo
 		banner "✔ Rsync completed" "$GREEN"
@@ -1100,7 +1138,7 @@ make_backup() {
 	echo "Backup created at: $BACKUP_FILE"
 	banner "======================" "$GREEN"
 
-	SUMMARY+=("${GREEN} ✔ Backup created: $BACKUP_FILE${NC}")
+	SUMMARY+=("${GREEN}✔ Backup created: $BACKUP_FILE${NC}")
 	echo
 }
 
