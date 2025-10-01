@@ -1,4 +1,5 @@
 #!/bin/bash
+#shellcheck shell=bash
 set -euo pipefail
 
 CONFIG_FILE="/etc/oca/oca_test.cfg"
@@ -300,43 +301,56 @@ debug_printf() {
 
 # ---- Arg parsing (phase 1 only: detect flags, save args) ----
 parse_args() {
-	local args=()
-	while [[ $# -gt 0 ]]; do
-		case "$1" in
-		--dry-run)
-			DRY_RUN="true"
-			shift
-			;;
-		--scan-only)
-			SCAN_ONLY="true"
-			shift
-			;;
-		--checksum-verify)
-			VERIFY_CHECKSUM="true"
-			shift
-			;;
-		--test) # hidden option
-			TEST_MODE="true"
-			shift
-			;;
-		--debug) # hidden option
-			DEBUG_MODE="true"
-			shift
-			;;
-		-h | --help)
-			usage
-			exit 0
-			;;
-		*)
-			args+=("$1")
-			shift
-			;;
-		esac
-	done
-	PARSED_ARGS=("${args[@]}")
+  local args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run|--dryrun|-n)
+        DRY_RUN="true"
+        shift
+        ;;
+      --scan-only|--scan)
+        SCAN_ONLY="true"
+        shift
+        ;;
+      --checksum-verify|--checksum|--verify)
+        VERIFY_CHECKSUM="true"
+        shift
+        ;;
+      --test)
+        TEST_MODE="true"
+        shift
+        ;;
+      --debug)
+        DEBUG_MODE="true"
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      --) 
+        shift
+        while [[ $# -gt 0 ]]; do
+          args+=("$1")
+          shift
+        done
+        break
+        ;;
+      -*)
+        echo "Error: Unknown option '$1'"
+        usage
+        exit 2
+        ;;
+      *)
+        args+=("$1")
+        shift
+        ;;
+    esac
+  done
+  PARSED_ARGS=("${args[@]}")
 }
 
-# ---- Mountpoint normalization (phase 2: after DRY_RUN is known) ----
+ # ---- Mountpoint normalization (phase 2: after DRY_RUN is known) ----
 setup_mountpoint() {
 	if [ "$SCAN_ONLY" = "true" ]; then
 		return
@@ -346,7 +360,7 @@ setup_mountpoint() {
 		if [[ ${#PARSED_ARGS[@]} -gt 0 && -z "$MOUNTPOINT" ]]; then
 			MOUNTPOINT="${PARSED_ARGS[0]}"
 		elif [[ -z "$MOUNTPOINT" ]]; then
-			read -rp "Enter the full mount path (e.g. /testmnt or /testmnt/subdir): " MOUNTPOINT
+			read -rp "Enter the full mount path (e.g. /mountpoint or /mountpoint/subdir): " MOUNTPOINT
 		fi
 
 		# Require full path
@@ -709,7 +723,7 @@ check_free_space() {
 # ---- Rsync copy + verification (no deletion of sources) ----
 rsync_base_flags() {
 	# Base flags: safe attributes, numeric IDs, sparse, whole-file
-	printf '%s\n' -aHAX --numeric-ids --sparse -W --human-readable
+	printf '%s\n' -aHAX --numeric-ids --sparse -W --human-readable --dirs
 }
 
 rsync_verify_flags() {
@@ -985,6 +999,9 @@ verify_all_refcnt() {
 		fi
 
 		# --- LIVE RUN ---
+		# Make sure the destination refcnt path exists (even if it's empty on source)
+		mkdir -p "$DST"
+
 		local out files rc
 		set +e
 		out="$(rsync --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1)"
