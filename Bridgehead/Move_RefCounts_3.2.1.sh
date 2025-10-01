@@ -2,7 +2,7 @@
 #shellcheck shell=bash
 set -euo pipefail
 
-CONFIG_FILE="/etc/oca/oca_test.cfg"
+CONFIG_FILE="/etc/oca/oca.cfg"
 BACKUP_DIR="/etc/oca"
 LOG_DIR="/var/log/oca_edit"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
