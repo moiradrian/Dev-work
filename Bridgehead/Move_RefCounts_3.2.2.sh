@@ -94,7 +94,56 @@ capture_system_info() {
 	echo
 }
 
+# ---- Detect alternate repo root from config (R3 layout) ----
+detect_alt_repo_from_config() {
+	# Need both signals present
+	if ! grep -qE '^[[:space:]]*export[[:space:]]+PLATFORM_DS_REFCNTS_ON_SSD=1[[:space:]]*$' "$CONFIG_FILE"; then
+		return 1
+	fi
+	if ! grep -qE '^[[:space:]]*export[[:space:]]+TGTSSDDIR=\$\{R3_DISK_JOURNAL_PATH\}[[:space:]]*$' "$CONFIG_FILE"; then
+		return 1
+	fi
+
+	# Extract R3_DISK_JOURNAL_PATH value (strip quotes and whitespace)
+	local r3_path
+	r3_path="$(
+		awk -F= '
+      BEGIN{r=""}
+      /^[[:space:]]*R3_DISK_JOURNAL_PATH[[:space:]]*=/ {
+        val=$2
+        sub(/^[[:space:]]*/,"",val)
+        sub(/[[:space:]]*$/,"",val)
+        gsub(/^"|"$/, "", val)
+        gsub(/^'\''|'\''$/, "", val)
+        print val
+        exit
+      }' "$CONFIG_FILE"
+	)"
+
+	if [[ -z "$r3_path" ]]; then
+		echo "Warning: R3_DISK_JOURNAL_PATH not found/parsed in $CONFIG_FILE; falling back." >&2
+		return 1
+	fi
+	if [[ ! -d "$r3_path" ]]; then
+		echo "Warning: R3_DISK_JOURNAL_PATH '$r3_path' does not exist; falling back." >&2
+		return 1
+	fi
+
+	# Success: echo the alternate repo root
+	printf "%s" "$r3_path"
+	return 0
+}
+
 get_repo_location() {
+	# First, try the R3 layout detection
+	local alt
+	if alt="$(detect_alt_repo_from_config 2>/dev/null)"; then
+		echo "[INFO] Detected R3 layout in config; using R3_DISK_JOURNAL_PATH as repo root: $alt"
+		printf "%s" "$alt"
+		return 0
+	fi
+
+	# Fallback to legacy method via `system --show`
 	if ! command -v system &>/dev/null; then
 		echo "Error: 'system' command not found; cannot determine Repository location." >&2
 		return 1
@@ -301,56 +350,56 @@ debug_printf() {
 
 # ---- Arg parsing (phase 1 only: detect flags, save args) ----
 parse_args() {
-  local args=()
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --dry-run|--dryrun|-n)
-        DRY_RUN="true"
-        shift
-        ;;
-      --scan-only|--scan)
-        SCAN_ONLY="true"
-        shift
-        ;;
-      --checksum-verify|--checksum|--verify)
-        VERIFY_CHECKSUM="true"
-        shift
-        ;;
-      --test)
-        TEST_MODE="true"
-        shift
-        ;;
-      --debug)
-        DEBUG_MODE="true"
-        shift
-        ;;
-      -h|--help)
-        usage
-        exit 0
-        ;;
-      --) 
-        shift
-        while [[ $# -gt 0 ]]; do
-          args+=("$1")
-          shift
-        done
-        break
-        ;;
-      -*)
-        echo "Error: Unknown option '$1'"
-        usage
-        exit 2
-        ;;
-      *)
-        args+=("$1")
-        shift
-        ;;
-    esac
-  done
-  PARSED_ARGS=("${args[@]}")
+	local args=()
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--dry-run | --dryrun | -n)
+			DRY_RUN="true"
+			shift
+			;;
+		--scan-only | --scan)
+			SCAN_ONLY="true"
+			shift
+			;;
+		--checksum-verify | --checksum | --verify)
+			VERIFY_CHECKSUM="true"
+			shift
+			;;
+		--test)
+			TEST_MODE="true"
+			shift
+			;;
+		--debug)
+			DEBUG_MODE="true"
+			shift
+			;;
+		-h | --help)
+			usage
+			exit 0
+			;;
+		--)
+			shift
+			while [[ $# -gt 0 ]]; do
+				args+=("$1")
+				shift
+			done
+			break
+			;;
+		-*)
+			echo "Error: Unknown option '$1'"
+			usage
+			exit 2
+			;;
+		*)
+			args+=("$1")
+			shift
+			;;
+		esac
+	done
+	PARSED_ARGS=("${args[@]}")
 }
 
- # ---- Mountpoint normalization (phase 2: after DRY_RUN is known) ----
+# ---- Mountpoint normalization (phase 2: after DRY_RUN is known) ----
 setup_mountpoint() {
 	if [ "$SCAN_ONLY" = "true" ]; then
 		return
