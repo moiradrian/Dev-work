@@ -2,6 +2,9 @@
 #shellcheck shell=bash
 set -euo pipefail
 
+# Preserve the original stderr on FD 3 for debug output (so it never gets merged into stdout)
+exec 3>&2
+
 CONFIG_FILE="/etc/oca/oca.cfg"
 BACKUP_DIR="/etc/oca"
 LOG_DIR="/var/log/oca_edit"
@@ -387,18 +390,20 @@ simulate_bar() {
 }
 
 debug_log() {
-  if [ "$DEBUG_MODE" = "true" ]; then
-    echo "[DEBUG]$*" >&2
-  fi
+	if [ "$DEBUG_MODE" = "true" ]; then
+		# Write to original stderr (FD 3), bypassing any later 2>&1 logging
+		echo "[DEBUG]$*" >&3
+	fi
 }
 
 debug_printf() {
-  if [ "$DEBUG_MODE" = "true" ]; then
-    local fmt="$1"; shift
-    printf "[DEBUG]$fmt\n" "$@" >&2
-  fi
+	if [ "$DEBUG_MODE" = "true" ]; then
+		local fmt="$1"
+		shift
+		# Write to original stderr (FD 3), bypassing any later 2>&1 logging
+		printf "[DEBUG]$fmt\n" "$@" >&3
+	fi
 }
-
 
 # ---- Arg parsing (phase 1 only: detect flags, save args) ----
 parse_args() {
@@ -525,7 +530,10 @@ setup_mountpoint() {
 setup_logging() {
 	mkdir -p "$LOG_DIR"
 	LOG_FILE="${LOG_DIR}/oca_edit_${TIMESTAMP}.log"
-	exec > >(stdbuf -oL -eL tee -a "$LOG_FILE") 2>&1
+
+	# Log stdout and stderr to the same file, but keep them as distinct FDs
+	exec 1> >(stdbuf -o0 -e0 tee -a "$LOG_FILE")
+	exec 2> >(stdbuf -o0 -e0 tee -a "$LOG_FILE" >&2)
 
 	banner "=== QoreStor Config Edit Script ===" "$CYAN"
 	echo "Run timestamp: $(date)"
@@ -878,7 +886,8 @@ copy_one_refcnt() {
 
 		local tmpfile
 		tmpfile="$(mktemp)"
-		rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" >"$tmpfile" 2>&1 || true
+		# unsafe rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" >"$tmpfile" 2>&1 || true
+		safe_rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" >"$tmpfile" 2>&1 || true
 
 		kill "$BAR_PID" 2>/dev/null
 		wait "$BAR_PID" 2>/dev/null || true
@@ -889,8 +898,8 @@ copy_one_refcnt() {
 		: "${files:=0}"
 		rm -f "$tmpfile"
 
-		printf "Directory %s: %'d files would be copied\n" "$base" "$files"
-		SUMMARY+=("Directory $base: $files files would be copied")
+		printf "Directory %s: %'d files would be transferred\n" "$base" "$files"
+		SUMMARY+=("Directory $base: $files files would be transferred")
 
 		DRY_COPY_FILES=$((DRY_COPY_FILES + files))
 		COPIED_FILES=$((COPIED_FILES + files))
@@ -937,7 +946,9 @@ verify_one_refcnt() {
 		RSYNC_ARGS+=(-n --stats)
 		echo "[DRY RUN] verify rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
 
-		out="$(rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1 || true)"
+		# unsafe out="$(rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1 || true)"
+		out="$(safe_rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1 || true)"
+
 		files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
 		: "${files:=0}"
 
@@ -950,7 +961,8 @@ verify_one_refcnt() {
 	echo "[LIVE] verify rsync ${RSYNC_ARGS[*]} \"$SRC/\" \"$DST/\"" >>"$LOG_FILE"
 
 	set +e
-	out="$(rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1)"
+	# unsafe out="$(rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1)"
+	out="$(safe_rsync "${RSYNC_ARGS[@]}" "$SRC/" "$DST/" 2>&1)"
 	rc=$?
 	set -e
 
@@ -1042,8 +1054,8 @@ copy_all_refcnt() {
 
 		local tmpfile
 		tmpfile="$(mktemp)"
-		rsync "${RSYNC_ARGS[@]}" "$repo/" "$target_base/" >"$tmpfile" 2>&1 || true
-
+		# unsafe rsync "${RSYNC_ARGS[@]}" "$repo/" "$target_base/" >"$tmpfile" 2>&1 || true
+		safe_rsync "${RSYNC_ARGS[@]}" "$repo/" "$target_base/" >"$tmpfile" 2>&1 || true
 		kill "$BAR_PID" 2>/dev/null
 		wait "$BAR_PID" 2>/dev/null || true
 		printf "\r[%-50s] %3d%% (simulated)\n" "##################################################" 100
@@ -1051,8 +1063,8 @@ copy_all_refcnt() {
 		awk -F': ' '/Number of regular files transferred/ {print $0}' "$tmpfile"
 		rm -f "$tmpfile"
 
-		echo "Total files that would be copied: $(printf "%'d" "$planned_files")"
-		SUMMARY+=("Total files that would be copied: $(printf "%'d" "$planned_files")")
+		echo "Total files that would be tranferred: $(printf "%'d" "$planned_files")"
+		SUMMARY+=("Total files that would be transferred: $(printf "%'d" "$planned_files")")
 		rm -f "$filelist"
 		return 0
 	fi
@@ -1105,7 +1117,8 @@ verify_all_refcnt() {
 
 		if [ "$DRY_RUN" = "true" ]; then
 			local out files
-			out="$(rsync -n --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1 || true)"
+			# unsafe out="$(rsync -n --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1 || true)"
+			out="$(safe_rsync -n --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1 || true)"
 			files="$(echo "$out" | awk -F': ' '/Number of regular files transferred/ {gsub(/[^0-9]/,"",$2); print $2+0}')"
 			: "${files:=0}"
 
@@ -1122,7 +1135,8 @@ verify_all_refcnt() {
 
 		local out files rc
 		set +e
-		out="$(rsync --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1)"
+		# unsafe out="$(rsync --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1)"
+		out="$(safe_rsync --stats $(rsync_verify_flags) "$SRC/" "$DST/" 2>&1)"
 		rc=$?
 		set -e
 
@@ -1230,9 +1244,10 @@ dry_run_preview() {
 
 	echo
 	banner "=== DRY-RUN CONFIG PREVIEW ===" "$YELLOW"
-	echo "[DRY RUN] Would insert after 'export TGTDIR':"
+	echo "[DRY RUN] Would replace existing 'export TGTSSDDIR=...' if present,"
+	echo "          otherwise insert after 'export TGTDIR' (or append if not found):"
 	echo "  $preview_line"
-	SUMMARY+=("${GREEN}✔ Would insert: $preview_line${NC}")
+	SUMMARY+=("${GREEN}✔ Would ensure single TGTSSDDIR: $preview_line${NC}")
 
 	if grep -q "^$REFCNT_OLD" "$CONFIG_FILE"; then
 		echo
@@ -1241,23 +1256,58 @@ dry_run_preview() {
 		echo "  → $REFCNT_NEW"
 		SUMMARY+=("${GREEN}✔ Would change: $REFCNT_OLD → $REFCNT_NEW${NC}")
 	else
-		banner "[DRY RUN] No PLATFORM_DS_REFCNTS_ON_SSD=0 line found, no change made there." "$YELLOW"
-		SUMMARY+=("${RED}✘ No PLATFORM_DS_REFCNTS_ON_SSD=0 found${NC}")
+		if grep -q "^$REFCNT_NEW" "$CONFIG_FILE"; then
+			banner "[DRY RUN] PLATFORM_DS_REFCNTS_ON_SSD already set to 1 — no change." "$GREEN"
+			SUMMARY+=("${GREEN}✔ PLATFORM_DS_REFCNTS_ON_SSD already 1${NC}")
+		else
+			banner "[DRY RUN] No PLATFORM_DS_REFCNTS_ON_SSD line found — will add the new one." "$YELLOW"
+			SUMMARY+=("${GREEN}✔ Will add: $REFCNT_NEW${NC}")
+		fi
 	fi
 
 	echo
 	echo "[DRY RUN] Preview of changes:"
 	awk -v newline="$preview_line" -v old="$REFCNT_OLD" -v new="$REFCNT_NEW" '
-        BEGIN { done_insert=0 }
-        /^export TGTDIR/ && !done_insert {
-            print
-            print newline
-            done_insert=1
-            next
-        }
-        $0 == old { print new; next }
-        { print }
-    ' "$CONFIG_FILE" >"${CONFIG_FILE}.dryrun.tmp"
+		BEGIN {
+			done_insert = 0
+			changed_refcnt = 0
+			replaced_tgtsddir = 0
+			saw_refcnt_new = 0
+		}
+		# Keep track if new refcnt line already exists
+		$0 == new {
+			saw_refcnt_new = 1
+			print
+			next
+		}
+		# Replace first TGTSSDDIR occurrence; drop further duplicates
+		/^export[[:space:]]+TGTSSDDIR=/ {
+			if (!replaced_tgtsddir) {
+				print newline
+				replaced_tgtsddir = 1
+			}
+			next
+		}
+		# Insert after TGTDIR if not yet inserted and no replacement happened
+		/^export[[:space:]]+TGTDIR/ && !done_insert && !replaced_tgtsddir {
+			print
+			print newline
+			done_insert = 1
+			next
+		}
+		# Replace old refcnt toggle if present
+		$0 == old {
+			print new
+			changed_refcnt = 1
+			next
+		}
+		{ print }
+		END {
+			# Fallbacks: append missing lines if anchors absent
+			if (!done_insert && !replaced_tgtsddir) print newline
+			if (!changed_refcnt && !saw_refcnt_new) print new
+		}
+	' "$CONFIG_FILE" >"${CONFIG_FILE}.dryrun.tmp"
 
 	show_diff "$CONFIG_FILE" "${CONFIG_FILE}.dryrun.tmp" || true
 	rm -f "${CONFIG_FILE}.dryrun.tmp"
@@ -1321,24 +1371,48 @@ apply_changes() {
 
 	# Build a temp file with proposed changes
 	awk -v newline="$NEW_LINE" -v old="$REFCNT_OLD" -v new="$REFCNT_NEW" '
-        BEGIN { done_insert=0; changed_refcnt=0 }
-        /^export TGTDIR/ && !done_insert {
-            print
-            print newline
-            done_insert=1
-            next
-        }
-        $0 == old {
-            print new
-            changed_refcnt=1
-            next
-        }
-        { print }
-        END {
-            if (!done_insert) print newline
-            if (!changed_refcnt) print new
-        }
-    ' "$CONFIG_FILE" >"${CONFIG_FILE}.tmp"
+		BEGIN {
+			done_insert = 0
+			changed_refcnt = 0
+			replaced_tgtsddir = 0
+			saw_refcnt_new = 0
+		}
+		# Track if the "new" refcnt line already exists to avoid duplicates
+		$0 == new {
+			saw_refcnt_new = 1
+			print
+			next
+		}
+		# Replace the first existing TGTSSDDIR=... line; drop any subsequent duplicates
+		/^export[[:space:]]+TGTSSDDIR=/ {
+			if (!replaced_tgtsddir) {
+				print newline
+				replaced_tgtsddir = 1
+			}
+			next
+		}
+		# If TGTDIR line exists and we havent inserted yet (and we didnt replace TGTSSDDIR earlier),
+		# insert newline immediately after it.
+		/^export[[:space:]]+TGTDIR/ && !done_insert && !replaced_tgtsddir {
+			print
+			print newline
+			done_insert = 1
+			next
+		}
+		# Replace the old refcnt toggle with the new one
+		$0 == old {
+			print new
+			changed_refcnt = 1
+			next
+		}
+		{ print }
+		END {
+			# If no TGTDIR anchor and no existing TGTSSDDIR was replaced, append newline at end
+			if (!done_insert && !replaced_tgtsddir) print newline
+			# Ensure the new refcnt line exists exactly once
+			if (!changed_refcnt && !saw_refcnt_new) print new
+		}
+	' "$CONFIG_FILE" >"${CONFIG_FILE}.tmp"
 
 	# Compare old vs new before replacing
 	if cmp -s "$CONFIG_FILE" "${CONFIG_FILE}.tmp"; then
