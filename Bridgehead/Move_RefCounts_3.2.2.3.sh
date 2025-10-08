@@ -31,6 +31,11 @@ DRY_SKIP_SERVICES="false"
 TEST_MODE="false"
 DEBUG_MODE="false"
 
+# Layout detection (standard vs. alt)
+ALT_LAYOUT="false"
+R3_JOURNAL_PATH=""
+REFCNT_SUBPATH=".ocarina_hidden/refcnt" # default; alt layout switches this to "refcnt"
+
 # ---- Defaults ----
 STOP_TIMEOUT=120      # seconds to wait for service to stop
 START_TIMEOUT=120     # seconds to wait for service startup
@@ -94,6 +99,35 @@ capture_system_info() {
 	echo
 }
 
+detect_layout_once() {
+	# Defensive defaults
+	declare -g ALT_LAYOUT="false"
+	declare -g REFCNT_SUBPATH=".ocarina_hidden/refcnt"
+	declare -g R3_JOURNAL_PATH=""
+
+	# Presence checks in CONFIG_FILE
+	local has_refcnt_on_ssd has_tgt_is_r3 r3val
+	has_refcnt_on_ssd=$(grep -E '^\s*export\s+PLATFORM_DS_REFCNTS_ON_SSD=1\s*$' "$CONFIG_FILE" || true)
+	has_tgt_is_r3=$(grep -E '^\s*export\s+TGTSSDDIR=\$\{R3_DISK_JOURNAL_PATH\}\s*$' "$CONFIG_FILE" || true)
+
+	if [[ -n "$has_refcnt_on_ssd" && -n "$has_tgt_is_r3" ]]; then
+		# Parse R3_DISK_JOURNAL_PATH
+		r3val="$(awk -F= '/^\s*export\s+R3_DISK_JOURNAL_PATH=/{sub(/\r/,"",$2); print $2}' "$CONFIG_FILE" | sed 's/^["'\'']//; s/["'\'']$//')"
+		if [[ -n "$r3val" && -d "$r3val" ]]; then
+			ALT_LAYOUT="true"
+			REFCNT_SUBPATH="refcnt"
+			R3_JOURNAL_PATH="$r3val"
+		fi
+	fi
+
+	# Debug: always print what we decided
+	debug_log "detect_layout_once: ALT_LAYOUT=$ALT_LAYOUT"
+	debug_log "detect_layout_once: REFCNT_SUBPATH=$REFCNT_SUBPATH"
+	if [[ "$ALT_LAYOUT" == "true" ]]; then
+		debug_log "detect_layout_once: R3_JOURNAL_PATH=$R3_JOURNAL_PATH"
+	fi
+}
+
 # ---- Detect alternate repo root from config (R3 layout) ----
 detect_alt_repo_from_config() {
 	# Print the R3_DISK_JOURNAL_PATH and return 0 if BOTH are true:
@@ -153,29 +187,30 @@ detect_alt_repo_from_config() {
 }
 
 get_repo_location() {
-	# Prefer R3 layout if the config indicates it
-	local alt
-	if alt="$(detect_alt_repo_from_config 2>/dev/null)"; then
-		echo "[INFO] Detected R3 layout; using R3_DISK_JOURNAL_PATH as repo root: $alt"
-		printf "%s" "$alt"
-		return 0
-	fi
-
-	# Fallback to legacy discovery via `system --show`
 	if ! command -v system &>/dev/null; then
 		echo "Error: 'system' command not found; cannot determine Repository location." >&2
 		return 1
 	fi
+
+	if [[ "$ALT_LAYOUT" == "true" ]]; then
+		# Alt layout: the "repo root" is the R3 journal path
+		if [[ -z "$R3_JOURNAL_PATH" || ! -d "$R3_JOURNAL_PATH" ]]; then
+			echo "Error: ALT_LAYOUT=true but R3_JOURNAL_PATH invalid: '$R3_JOURNAL_PATH'." >&2
+			return 1
+		fi
+		debug_log "get_repo_location: ALT repo -> $R3_JOURNAL_PATH (subpath=$REFCNT_SUBPATH)"
+		printf "%s" "$R3_JOURNAL_PATH"
+		return 0
+	fi
+
+	# Standard layout
 	local repo
 	repo="$(system --show | awk -F': ' '/^Repository location/ {print $2}' | sed 's/[[:space:]]*$//')"
-	if [[ -z "${repo:-}" ]]; then
-		echo "Error: Could not parse Repository location from 'system --show'." >&2
+	if [[ -z "${repo:-}" || ! -d "$repo" ]]; then
+		echo "Error: Could not resolve valid Repository location from 'system --show'." >&2
 		return 1
 	fi
-	if [[ ! -d "$repo" ]]; then
-		echo "Error: Parsed Repository location '$repo' does not exist or is not a directory." >&2
-		return 1
-	fi
+	debug_log "get_repo_location: standard repo -> $repo (subpath=$REFCNT_SUBPATH)"
 	printf "%s" "$repo"
 }
 
@@ -671,7 +706,7 @@ plan_copy_totals() {
 		[[ -d "$d" ]] || continue
 		local base="$(basename -- "$d")"
 		[[ "$base" =~ ^[0-9]+$ ]] || continue
-		local refdir="$d/.ocarina_hidden/refcnt"
+		local refdir="$d/$REFCNT_SUBPATH"
 		if [[ -d "$refdir" ]]; then
 			local count
 			count="$(find "$refdir" -type f 2>/dev/null | wc -l)"
@@ -682,6 +717,7 @@ plan_copy_totals() {
 
 	echo "$total_files"
 }
+
 safe_rsync() {
 	# usage: safe_rsync <args...>
 	# If DRY_RUN=true, require that -n (or --dry-run) is present in args.
@@ -709,7 +745,7 @@ scan_refcnt_sizes() {
 	}
 
 	echo "Scanning refcount data under: $repo"
-	echo "Looking for integer dirs with '.ocarina_hidden/refcnt'"
+	echo "Looking for integer dirs with '$REFCNT_SUBPATH'"
 	echo
 
 	local -i found=0
@@ -718,12 +754,11 @@ scan_refcnt_sizes() {
 	shopt -s nullglob
 	for d in "$repo"/*; do
 		[[ -d "$d" ]] || continue
-		local base
-		base="$(basename -- "$d")"
+		local base="$(basename -- "$d")"
 		[[ "$base" =~ ^[0-9]+$ ]] || continue
 		((found++))
 
-		local refdir="$d/.ocarina_hidden/refcnt"
+		local refdir="$d/$REFCNT_SUBPATH"
 		local bytes=0
 		if [[ -d "$refdir" ]]; then
 			bytes="$(du -sb "$refdir" 2>/dev/null | awk '{print $1}')"
@@ -733,7 +768,6 @@ scan_refcnt_sizes() {
 		fi
 
 		total_bytes=$((total_bytes + bytes))
-
 		local hb
 		hb=$(human_bytes "$bytes")
 		printf "Directory %s: %s\n" "$base" "$hb"
@@ -805,6 +839,23 @@ rsync_verify_flags() {
 copy_one_refcnt() {
 	local SRC="$1" DST="$2" base="$3"
 
+	# --- Normalize SRC/DST to the refcnt subtree for both layouts ---
+	# Expect global: REFCNT_SUBPATH (".ocarina_hidden/refcnt" or "refcnt")
+	# If SRC is an integer dir (or its base) and SRC/$REFCNT_SUBPATH exists, fix SRC/DST.
+	local tail="${SRC%/}"
+	tail="${tail##*/}"                      # last path component of SRC
+	local need_tail="${REFCNT_SUBPATH##*/}" # "refcnt"
+
+	if [[ "$tail" != "$need_tail" && -d "$SRC/$REFCNT_SUBPATH" ]]; then
+		debug_log "copy_one_refcnt: auto-appending REFCNT_SUBPATH to SRC/DST (layout fix)"
+		SRC="$SRC/$REFCNT_SUBPATH"
+		# Only append to DST if it doesn't already end with .../refcnt
+		local dst_tail="${DST%/}"
+		dst_tail="${dst_tail##*/}"
+		[[ "$dst_tail" == "$need_tail" ]] || DST="$DST/$REFCNT_SUBPATH"
+	fi
+	# --- end normalization ---
+
 	if [[ ! -d "$SRC" ]]; then
 		echo "Note: Missing $SRC (skipped)"
 		SUMMARY+=("✘ Skip (missing): $SRC")
@@ -818,7 +869,6 @@ copy_one_refcnt() {
 
 	local -a RSYNC_ARGS
 	if [ "$DRY_RUN" = "true" ]; then
-		# DRY-RUN uses original array logic
 		IFS=$'\n' read -r -d '' -a RSYNC_ARGS < <(rsync_base_flags && printf '\0')
 		RSYNC_ARGS+=(--stats -n)
 
@@ -974,7 +1024,9 @@ copy_all_refcnt() {
 	local filelist
 	filelist="$(mktemp)"
 	echo "[INFO] Building refcnt file list, this may take a while..."
-	(cd "$repo" && find . -type f -path "*/.ocarina_hidden/refcnt/*") >"$filelist"
+	# Build list of all refcnt files (relative to $repo) for current layout
+	(cd "$repo" && find . -type f -path "*/${REFCNT_SUBPATH}/*") >"$filelist"
+
 	echo "[INFO] File list built: $(wc -l <"$filelist") files queued for rsync"
 	echo
 
@@ -1049,8 +1101,8 @@ verify_all_refcnt() {
 		local base="$(basename -- "$d")"
 		[[ "$base" =~ ^[0-9]+$ ]] || continue
 
-		local SRC="$d/.ocarina_hidden/refcnt"
-		local DST="$target_base/$base/.ocarina_hidden/refcnt"
+		local SRC="$d/$REFCNT_SUBPATH"
+		local DST="$target_base/$base/$REFCNT_SUBPATH"
 
 		if [ "$DRY_RUN" = "true" ]; then
 			local out files
@@ -1401,6 +1453,7 @@ confirm_live_run() {
 main() {
 	parse_args "$@" # phase 1: detect flags, store args
 	setup_logging
+	detect_layout_once
 
 	if [ "$SCAN_ONLY" = "true" ]; then
 		echo
