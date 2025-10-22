@@ -1274,37 +1274,38 @@ dry_run_preview() {
 			replaced_tgtsddir = 0
 			saw_refcnt_new = 0
 		}
-		# Keep track if new refcnt line already exists
-		$0 == new {
-			saw_refcnt_new = 1
-			print
-			next
-		}
-		# Replace first TGTSSDDIR occurrence; drop further duplicates
-		/^export[[:space:]]+TGTSSDDIR=/ {
+		# Keep comments untouched
+		/^[[:space:]]*#/ { print; next }
+
+		# Track if the "new" refcnt line already exists to avoid duplicates
+		$0 == new { saw_refcnt_new = 1; print; next }
+
+		# Replace the first existing TGTSSDDIR=... line (with or without "export"); drop further duplicates
+		/^[[:space:]]*(export[[:space:]]+)?TGTSSDDIR[[:space:]]*=/ {
 			if (!replaced_tgtsddir) {
-				print newline
-				replaced_tgtsddir = 1
+			print newline
+			replaced_tgtsddir = 1
 			}
 			next
 		}
-		# Insert after TGTDIR if not yet inserted and no replacement happened
-		/^export[[:space:]]+TGTDIR/ && !done_insert && !replaced_tgtsddir {
+
+		# Insert after TGTDIR (with or without "export") if we haven’t inserted yet and we didn’t replace TGTSSDDIR
+		/^[[:space:]]*(export[[:space:]]+)?TGTDIR[[:space:]]*=/ && !done_insert && !replaced_tgtsddir {
 			print
 			print newline
 			done_insert = 1
 			next
 		}
+
 		# Replace old refcnt toggle if present
-		$0 == old {
-			print new
-			changed_refcnt = 1
-			next
-		}
+		$0 == old { print new; changed_refcnt = 1; next }
+
 		{ print }
+
 		END {
-			# Fallbacks: append missing lines if anchors absent
+			# If no TGTDIR anchor and no existing TGTSSDDIR was replaced, append newline at end
 			if (!done_insert && !replaced_tgtsddir) print newline
+			# Ensure the new refcnt line exists exactly once
 			if (!changed_refcnt && !saw_refcnt_new) print new
 		}
 	' "$CONFIG_FILE" >"${CONFIG_FILE}.dryrun.tmp"
@@ -1377,35 +1378,34 @@ apply_changes() {
 			replaced_tgtsddir = 0
 			saw_refcnt_new = 0
 		}
+		# Keep comments untouched
+		/^[[:space:]]*#/ { print; next }
+
 		# Track if the "new" refcnt line already exists to avoid duplicates
-		$0 == new {
-			saw_refcnt_new = 1
-			print
-			next
-		}
-		# Replace the first existing TGTSSDDIR=... line; drop any subsequent duplicates
-		/^export[[:space:]]+TGTSSDDIR=/ {
+		$0 == new { saw_refcnt_new = 1; print; next }
+
+		# Replace the first existing TGTSSDDIR=... line (with or without "export"); drop further duplicates
+		/^[[:space:]]*(export[[:space:]]+)?TGTSSDDIR[[:space:]]*=/ {
 			if (!replaced_tgtsddir) {
-				print newline
-				replaced_tgtsddir = 1
+			print newline
+			replaced_tgtsddir = 1
 			}
 			next
 		}
-		# If TGTDIR line exists and we havent inserted yet (and we didnt replace TGTSSDDIR earlier),
-		# insert newline immediately after it.
-		/^export[[:space:]]+TGTDIR/ && !done_insert && !replaced_tgtsddir {
+
+		# Insert after TGTDIR (with or without "export") if not inserted yet and no replacement happened
+		/^[[:space:]]*(export[[:space:]]+)?TGTDIR[[:space:]]*=/ && !done_insert && !replaced_tgtsddir {
 			print
 			print newline
 			done_insert = 1
 			next
 		}
+
 		# Replace the old refcnt toggle with the new one
-		$0 == old {
-			print new
-			changed_refcnt = 1
-			next
-		}
+		$0 == old { print new; changed_refcnt = 1; next }
+
 		{ print }
+
 		END {
 			# If no TGTDIR anchor and no existing TGTSSDDIR was replaced, append newline at end
 			if (!done_insert && !replaced_tgtsddir) print newline
