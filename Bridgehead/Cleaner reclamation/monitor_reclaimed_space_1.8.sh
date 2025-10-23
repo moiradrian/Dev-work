@@ -216,18 +216,16 @@ to_epoch() {
 	date -d "$ts" +%s 2>/dev/null || gdate -d "$ts" +%s 2>/dev/null || echo ""
 }
 
-# Sparkline (bytes/hour), trend-colored:
-#  - newest (rightmost) sample: yellow
-#  - up vs previous: green
-#  - down vs previous: red
-#  - unchanged: grey (dim)
+# Sparkline (bytes/hour) with trend coloring:
+# - Bars 0..N-2: color by *next* sample (forward delta) so older bars settle
+# - Bar N-1 (newest): color by *previous* sample (backward delta)
+#   Colors: up=green, down=red, same=grey; newest follows same rule.
 spark() {
 	[[ -z "${1-}" ]] && {
 		echo " "
 		return
 	}
 	local vals=($1) max=0 out=""
-	# find max for scaling
 	for v in "${vals[@]}"; do ((v > max)) && max=$v; done
 	((max == 0)) && {
 		echo " "
@@ -235,26 +233,37 @@ spark() {
 	}
 
 	local blocks=(▁ ▂ ▃ ▄ ▅ ▆ ▇ █)
-	local last_index=$((${#vals[@]} - 1))
+	local last=$((${#vals[@]} - 1))
 
 	for i in "${!vals[@]}"; do
 		local v="${vals[$i]}"
-		# scale value to 0..7 index
+		# scale to 0..7
 		local idx=$((v * (${#blocks[@]} - 1) / max))
 		((idx < 0)) && idx=0
 		((idx > ${#blocks[@]} - 1)) && idx=${#blocks[@]}-1
 
-		# choose color based on trend vs previous (except newest override)
+		# choose color
 		local color=""
-		if ((i == last_index)); then
-			color="$CLR_YELLOW" # newest sample highlight
-		elif ((i == 0)); then
-			color="$CLR_DIM" # no previous to compare
+		if ((i == last)); then
+			# newest bar: compare to previous (if exists)
+			if ((last == 0)); then
+				color="$CLR_DIM"
+			else
+				local prev_v="${vals[$((i - 1))]}"
+				if ((v > prev_v)); then
+					color="$CLR_GREEN"
+				elif ((v < prev_v)); then
+					color="$CLR_RED"
+				else
+					color="$CLR_DIM"
+				fi
+			fi
 		else
-			local prev_v="${vals[$((i - 1))]}"
-			if ((v > prev_v)); then
+			# older bars: compare to the next sample (forward delta)
+			local next_v="${vals[$((i + 1))]}"
+			if ((next_v > v)); then
 				color="$CLR_GREEN"
-			elif ((v < prev_v)); then
+			elif ((next_v < v)); then
 				color="$CLR_RED"
 			else
 				color="$CLR_DIM"
