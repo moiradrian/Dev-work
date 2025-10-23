@@ -456,7 +456,7 @@ while true; do
 		# Sparkline (optional, width-aware)
 		if ((SPARK_ON == 1)); then
 			# compute drawable width: either fixed SPARK_WIDTH or auto-fit
-			prefix_len=13 # "  rate spark: "
+			prefix_len=13 # "  rate change: "
 			if ((SPARK_WIDTH > 0)); then
 				points=$SPARK_WIDTH
 			else
@@ -471,12 +471,12 @@ while true; do
 			if [[ "$g" == "LOCAL" && ${#rate_local[@]} -gt 1 ]]; then
 				draw_local=("${rate_local[@]}")
 				((${#draw_local[@]} > points)) && draw_local=("${draw_local[@]: -$points}")
-				echo "  rate spark: $(spark "${draw_local[*]}")"
+				echo "  rate change: $(spark "${draw_local[*]}")"
 			fi
 			if [[ "$g" == "CLOUD" && ${#rate_cloud[@]} -gt 1 ]]; then
 				draw_cloud=("${rate_cloud[@]}")
 				((${#draw_cloud[@]} > points)) && draw_cloud=("${draw_cloud[@]: -$points}")
-				echo "  rate spark: $(spark "${draw_cloud[*]}")"
+				echo "  rate change: $(spark "${draw_cloud[*]}")"
 			fi
 		fi
 	done
