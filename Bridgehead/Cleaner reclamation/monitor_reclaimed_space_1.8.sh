@@ -45,6 +45,19 @@ PAUSED=0
 SHOW_HELP=0
 STATUS_MSG=""
 BASELINE_TIME="" # human-readable timestamp of last (auto or manual) baseline
+# Per-group last-sample epoch for instant rate calc
+LAST_EPOCH_LOCAL=0
+LAST_EPOCH_CLOUD=0
+
+# Instant-rate smoothing and sampling
+EMA_NUM="${EMA_NUM:-2}"                  # alpha numerator (e.g., 2/5 ~= 0.4)
+EMA_DEN="${EMA_DEN:-5}"                  # alpha denominator
+MIN_SAMPLE_SECS="${MIN_SAMPLE_SECS:-60}" # ignore <60s intervals unless bytes>0
+MIN_VISIBLE_BPH="${MIN_VISIBLE_BPH:-1}"  # if bytes>0 but rounds to 0/h, show at least 1 B/h
+INST_LOCAL_EMA=0
+INST_CLOUD_EMA=0
+LAST_EPOCH_LOCAL=0
+LAST_EPOCH_CLOUD=0
 
 # --- Arg parsing ---
 while [[ $# -gt 0 ]]; do
@@ -216,54 +229,82 @@ to_epoch() {
 	date -d "$ts" +%s 2>/dev/null || gdate -d "$ts" +%s 2>/dev/null || echo ""
 }
 
-# Sparkline (bytes/hour) with trend coloring:
-# - Bars 0..N-2: color by *next* sample (forward delta) so older bars settle
-# - Bar N-1 (newest): color by *previous* sample (backward delta)
-#   Colors: up=green, down=red, same=grey; newest follows same rule.
+# Sparkline (bytes/hour) with min–max scaling and trend coloring:
+# - Bars 0..N-2 colored by next sample (forward delta)
+# - Bar N-1 (newest) colored by previous (backward delta)
 spark() {
 	[[ -z "${1-}" ]] && {
 		echo " "
 		return
 	}
-	local vals=($1) max=0 out=""
-	for v in "${vals[@]}"; do ((v > max)) && max=$v; done
-	((max == 0)) && {
+	local vals=($1) out=""
+	local n=${#vals[@]}
+	((n == 0)) && {
 		echo " "
 		return
 	}
 
-	local blocks=(▁ ▂ ▃ ▄ ▅ ▆ ▇ █)
-	local last=$((${#vals[@]} - 1))
+	# min–max across the window
+	local min="${vals[0]}" max="${vals[0]}"
+	for v in "${vals[@]}"; do
+		((v < min)) && min="$v"
+		((v > max)) && max="$v"
+	done
 
+	local range=$((max - min))
+	local blocks=(▁ ▂ ▃ ▄ ▅ ▆ ▇ █)
+	local last=$((n - 1))
+
+	# If flat (range==0), draw a mid-level flat line so it's visible
+	if ((range == 0)); then
+		local mid="${blocks[3]}"
+		for i in "${!vals[@]}"; do
+			local color="$CLR_DIM"
+			if ((i == last && n > 1)); then
+				# newest bar color vs previous
+				local pv="${vals[$((i - 1))]}"
+				if ((vals[$i] > pv)); then
+					color="$CLR_GREEN"
+				elif ((vals[$i] < pv)); then
+					color="$CLR_RED"
+				else
+					color="$CLR_DIM"
+				fi
+			fi
+			out+="${color}${mid}${CLR_RESET}"
+		done
+		echo "$out"
+		return
+	fi
+
+	# Normal case: scale to 0..7 within [min..max]
 	for i in "${!vals[@]}"; do
 		local v="${vals[$i]}"
-		# scale to 0..7
-		local idx=$((v * (${#blocks[@]} - 1) / max))
+		local num=$(((v - min) * (${#blocks[@]} - 1)))
+		local idx=$((num / range))
 		((idx < 0)) && idx=0
 		((idx > ${#blocks[@]} - 1)) && idx=${#blocks[@]}-1
 
-		# choose color
+		# color rule
 		local color=""
 		if ((i == last)); then
-			# newest bar: compare to previous (if exists)
 			if ((last == 0)); then
 				color="$CLR_DIM"
 			else
-				local prev_v="${vals[$((i - 1))]}"
-				if ((v > prev_v)); then
+				local pv="${vals[$((i - 1))]}"
+				if ((v > pv)); then
 					color="$CLR_GREEN"
-				elif ((v < prev_v)); then
+				elif ((v < pv)); then
 					color="$CLR_RED"
 				else
 					color="$CLR_DIM"
 				fi
 			fi
 		else
-			# older bars: compare to the next sample (forward delta)
-			local next_v="${vals[$((i + 1))]}"
-			if ((next_v > v)); then
+			local nv="${vals[$((i + 1))]}"
+			if ((nv > v)); then
 				color="$CLR_GREEN"
-			elif ((next_v < v)); then
+			elif ((nv < v)); then
 				color="$CLR_RED"
 			else
 				color="$CLR_DIM"
@@ -272,7 +313,6 @@ spark() {
 
 		out+="${color}${blocks[$idx]}${CLR_RESET}"
 	done
-
 	echo "$out"
 }
 
@@ -304,6 +344,10 @@ while true; do
 	echo "Controls: '+' faster (-5m), '-' slower (+5m), 'r' refresh, 'p' pause, 'b' baseline, 'h' help, 'q' quit"
 	echo "Refresh every $(fmt_secs "$INTERVAL")"
 	[[ -n "$LOG_FILE" ]] && echo "Logging CSV to: ${CLR_DIM}${LOG_FILE}${CLR_RESET}"
+
+	if ((SPARK_ON == 1)); then
+		echo "${CLR_DIM}avg = since period start; inst = last interval${CLR_RESET}"
+	fi
 	echo "--------------------------------------------------------------------------------"
 	# Baseline indicator (dim)
 	if [[ -n "$BASELINE_TIME" ]]; then
@@ -434,17 +478,68 @@ while true; do
 			fi
 			line2=$(printf "  cleaner period start: %s   |   avg reclaim rate: %s" "$pstart" "$rate_text")
 
-			# Maintain spark buffers (rolling)
+			# --- Instant (per-interval) rate in bytes/hour (rounded, guarded, smoothed) ---
+			step_bytes=$((total - prev[$g]))
+			((step_bytes < 0)) && step_bytes=0
+
+			# elapsed seconds since last sample for this group
 			if [[ "$g" == "LOCAL" ]]; then
-				rate_local+=("$rate_int")
+				last_ep="$LAST_EPOCH_LOCAL"
+			else
+				last_ep="$LAST_EPOCH_CLOUD"
+			fi
+
+			if [[ -z "$last_ep" || "$last_ep" -le 0 ]]; then
+				elapsed_step=$((INTERVAL > 0 ? INTERVAL : 1))
+			else
+				elapsed_step=$((now_epoch - last_ep))
+				((elapsed_step <= 0)) && elapsed_step=1
+			fi
+
+			# Ignore ultra-short samples unless we actually had bytes change
+			if ((elapsed_step < MIN_SAMPLE_SECS && step_bytes == 0)); then
+				inst_bph=0
+			else
+				# Rounded integer: (x*3600 + elapsed/2)/elapsed
+				inst_bph=$(((step_bytes * 3600 + elapsed_step / 2) / elapsed_step))
+				# ensure tiny-but-nonzero gets at least 1 B/h
+				if ((step_bytes > 0 && inst_bph == 0)); then
+					inst_bph=$MIN_VISIBLE_BPH
+				fi
+			fi
+
+			# Update last epoch now that we've computed the interval
+			if [[ "$g" == "LOCAL" ]]; then
+				LAST_EPOCH_LOCAL="$now_epoch"
+			else
+				LAST_EPOCH_CLOUD="$now_epoch"
+			fi
+
+			# --- EMA smoothing (integer) ---
+			# ema = (alpha*inst + (1-alpha)*ema_prev), alpha = EMA_NUM/EMA_DEN
+			if [[ "$g" == "LOCAL" ]]; then
+				INST_LOCAL_EMA=$(((EMA_NUM * inst_bph + (EMA_DEN - EMA_NUM) * INST_LOCAL_EMA + EMA_DEN / 2) / EMA_DEN))
+				spark_val="$INST_LOCAL_EMA"
+			else
+				INST_CLOUD_EMA=$(((EMA_NUM * inst_bph + (EMA_DEN - EMA_NUM) * INST_CLOUD_EMA + EMA_DEN / 2) / EMA_DEN))
+				spark_val="$INST_CLOUD_EMA"
+			fi
+
+			# Feed smoothed instant to spark buffers
+			if [[ "$g" == "LOCAL" ]]; then
+				rate_local+=("$spark_val")
 				((${#rate_local[@]} > SPARK_POINTS)) && rate_local=("${rate_local[@]: -$SPARK_POINTS}")
-			elif [[ "$g" == "CLOUD" ]]; then
-				rate_cloud+=("$rate_int")
+			else
+				rate_cloud+=("$spark_val")
 				((${#rate_cloud[@]} > SPARK_POINTS)) && rate_cloud=("${rate_cloud[@]: -$SPARK_POINTS}")
 			fi
 
-			# Alert on high rate
-			alert_if_rate_high "$g" "$rate_int"
+			# Alerts: use unsmoothed instantaneous rate so spikes still alert
+			alert_if_rate_high "$g" "$inst_bph"
+
+			# Append instantaneous text next to average
+			line2="${line2}   |   inst: $(hr "$inst_bph")/h"
+
 		fi
 
 		# width guards + print
