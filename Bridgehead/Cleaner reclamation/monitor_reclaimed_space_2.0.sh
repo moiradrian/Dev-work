@@ -489,7 +489,11 @@ while true; do
 			# Determine persistent color token for the NEW sample vs the previous sample
 			# G = up, R = down, D = same
 			if [[ "$g" == "LOCAL" ]]; then
-				prev_val="${rate_local_vals[$((${#rate_local_vals[@]} - 1))]:-}"
+				if ((${#rate_local_vals[@]} == 0)); then
+					prev_val=""
+				else
+					prev_val="${rate_local_vals[$((${#rate_local_vals[@]} - 1))]}"
+				fi
 				if [[ -z "$prev_val" ]]; then
 					tok="D"
 				elif ((spark_val > prev_val)); then
@@ -506,7 +510,11 @@ while true; do
 					rate_local_colors=("${rate_local_colors[@]: -$SPARK_POINTS}")
 				fi
 			else
-				prev_val="${rate_cloud_vals[$((${#rate_cloud_vals[@]} - 1))]:-}"
+				if ((${#rate_cloud_vals[@]} == 0)); then
+					prev_val=""
+				else
+					prev_val="${rate_cloud_vals[$((${#rate_cloud_vals[@]} - 1))]}"
+				fi
 				if [[ -z "$prev_val" ]]; then
 					tok="D"
 				elif ((spark_val > prev_val)); then
