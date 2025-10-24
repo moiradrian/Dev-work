@@ -142,11 +142,25 @@ fi
 ((INTERVAL > INTERVAL_MAX)) && INTERVAL="$INTERVAL_MAX"
 
 # --- TTY handling ---
+# --- TTY handling ---
 cleanup() {
+	# Reset attributes/colors first (prevents "stuck" dim/green text)
+	tput sgr0 2>/dev/null || printf '\033[0m'
+
+	# Clear footer (countdown + bar) so you don’t leave artifacts
+	clear_footer_area 2>/dev/null || true
+
+	# Show cursor again
 	tput cnorm 2>/dev/null || true
-	stty echo -icanon time 1 min 0 2>/dev/null || true
+
+	# Restore cooked mode (echo + canonical input)
+	# Prefer an explicit restore; fall back to sane if needed
+	stty echo icanon time 1 min 0 2>/dev/null || stty sane 2>/dev/null || true
 }
-trap cleanup EXIT INT TERM
+
+# Ensure cleanup runs no matter how we exit
+trap cleanup EXIT INT TERM HUP
+
 tput civis 2>/dev/null || true
 stty -echo -icanon time 0 min 0 2>/dev/null || true # immediate keypresses
 
@@ -622,6 +636,22 @@ while true; do
 			fi
 			line2=$(printf "  cleaner period start: %s   |   avg reclaim rate: %s" "$pstart" "$rate_text")
 
+			# --- Seed sparkline on very first render so we show 1 block immediately ---
+			skip_inst=0
+			if [[ "$g" != "GRAND" ]]; then
+				if [[ "$g" == "LOCAL" && ${#rate_local_vals[@]} -eq 0 && "$rate_int" -ge 0 ]]; then
+					rate_local_vals+=("$rate_int")
+					rate_local_colors+=("D")      # neutral color for the seed
+					LAST_EPOCH_LOCAL="$now_epoch" # start instant interval from now
+					skip_inst=1                   # don't also append instant in this same cycle
+				elif [[ "$g" == "CLOUD" && ${#rate_cloud_vals[@]} -eq 0 && "$rate_int" -ge 0 ]]; then
+					rate_cloud_vals+=("$rate_int")
+					rate_cloud_colors+=("D")
+					LAST_EPOCH_CLOUD="$now_epoch"
+					skip_inst=1
+				fi
+			fi
+
 			# Instantaneous per-interval rate
 			step_bytes=$((total - prev[$g]))
 			((step_bytes < 0)) && step_bytes=0
@@ -662,8 +692,10 @@ while true; do
 				elif ((spark_val < prev_val)); then
 					tok="R"
 				else tok="D"; fi
-				rate_local_vals+=("$spark_val")
-				rate_local_colors+=("$tok")
+				if ((skip_inst == 0)); then
+					rate_local_vals+=("$spark_val")
+					rate_local_colors+=("$tok")
+				fi
 				if ((${#rate_local_vals[@]} > SPARK_POINTS)); then
 					rate_local_vals=("${rate_local_vals[@]: -$SPARK_POINTS}")
 					rate_local_colors=("${rate_local_colors[@]: -$SPARK_POINTS}")
@@ -679,8 +711,10 @@ while true; do
 				elif ((spark_val < prev_val)); then
 					tok="R"
 				else tok="D"; fi
-				rate_cloud_vals+=("$spark_val")
-				rate_cloud_colors+=("$tok")
+				if ((skip_inst == 0)); then
+					rate_cloud_vals+=("$spark_val")
+					rate_cloud_colors+=("$tok")
+				fi
 				if ((${#rate_cloud_vals[@]} > SPARK_POINTS)); then
 					rate_cloud_vals=("${rate_cloud_vals[@]: -$SPARK_POINTS}")
 					rate_cloud_colors=("${rate_cloud_colors[@]: -$SPARK_POINTS}")
@@ -711,7 +745,7 @@ while true; do
 			fi
 			((points < 5)) && points=5
 
-			if [[ "$g" == "LOCAL" && ${#rate_local_vals[@]} -gt 1 ]]; then
+			if [[ "$g" == "LOCAL" && ${#rate_local_vals[@]} -gt 0 ]]; then
 				draw_vals=("${rate_local_vals[@]}")
 				draw_toks=("${rate_local_colors[@]}")
 				((${#draw_vals[@]} > points)) && {
@@ -720,7 +754,7 @@ while true; do
 				}
 				echo "  rate spark: $(spark "${draw_vals[*]}" "${draw_toks[*]}")"
 			fi
-			if [[ "$g" == "CLOUD" && ${#rate_cloud_vals[@]} -gt 1 ]]; then
+			if [[ "$g" == "CLOUD" && ${#rate_cloud_vals[@]} -gt 0 ]]; then
 				draw_vals=("${rate_cloud_vals[@]}")
 				draw_toks=("${rate_cloud_colors[@]}")
 				((${#draw_vals[@]} > points)) && {
