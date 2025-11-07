@@ -1,0 +1,1016 @@
+<!DOCTYPE html>
+<!-- Refactor of BH_deduplication_Sim_14.5.2.GA.html -->
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Deduplication Simulator (Refactored)</title>
+  <link rel="icon" type="image/x-icon"
+    href="data:image/x-icon;base64,AAABAAIAEBAAAAAAIADmAgAAJgAAACAgAAAAACAAKwcAAAwDAACJUE5HDQoaCgAAAA1JSERSAAAAEAAAABAIBgAAAB/z/2EAAAKtSURBVHichZNPSFRRFMa/c+57bxznpc40TZlBZVoLo39GREGTKGW1qM0QRLSoKAysFi0iCKmN6whaRIuCrMVAEFTUoiYi1KCoJEpEshRKHcvGPzPvje/d02IUS4y+3Tnf78K599wPmEeCFhbEjdk6bghaeD52zsGEEkDN1CmRokcigVkfSpBQAGimR5grBQweOV9pt3cfMtO/jhLgOeULb05uXnun/PalL/D/xkkAIkCG4qfsotGROmskc9AYGz9gZL0Q9FSBYhNesTnhldr3pxaVJb3q0ueR5PWMAEQC8MDWRIDWrD4ce9jRao1kFgI+fNAUEanp2T2GtgAD+WjpYDpRf2Eq695dcQt5JkAHdsdV2dPXTbnKirbxmuVt2rTyCmRCIBCAAcs3TWdiY/XNXFVFW+mDF8dW7KshwiVduILJ4gS3vwuM5dbnVsaeZFcte7+g6/NOa3h0CwA45dH2iQ3VqdCnz5uCX9N7nAWBjuDky23igw0ACr72dLHVg7HcumDf993Wtx9bcmurkm555IP44nCoyAqnXjcrxy0BlOjiQDfGASDO/Aa1BA1oy+wHmHyivHLzYftNzwmdy3s8mbPtV5+OK8ct0UQuSJFYVh+k8L5GLWwBADGNPhA0iZAm8lg0q8z4cgMcArT2iYREFBgadnH/zBoZiZgAgB8L98KymKG5sF0wDJUXJhcAE0gzNCNgshsr6wUAJGLClEz6ghbuvXrmWWZ17CKCIcXim4BoJcwgYgCaRZt+yOaxNUvPRVI3OgUtTMnk7LcSgEDAz/qT+/NlO9KCWskubrjnLNn1WFArbqRuaLjx9F7QNDt/FgoBGjh5udqN1n+cWNbYmV3S8NaJNnR9Pdta+SfzT6Wmga7Wa+F046mmoV1NzT1XrpT86f1X80X3X3H+DfR8HXd+C8inAAAAAElFTkSuQmCC" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    /* ========== 🎨 Styles ========== */
+    :root {
+      --bg: #333;
+      --fg: #fff;
+      --grid: #444;
+      --accent: #FB4F14;
+      --panel: #222;
+    }
+
+    html,
+    body {
+      height: 100%;
+    }
+
+    body {
+      margin: 20px;
+      font-family: Arial, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+    }
+
+    fieldset {
+      border: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    .container {
+      display: flex;
+      gap: 40px;
+      align-items: flex-start;
+      margin-bottom: 40px;
+      flex-wrap: wrap;
+    }
+
+    .column {
+      flex: 1;
+      min-width: 280px;
+      max-width: 32%;
+    }
+
+    .input-group {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      white-space: nowrap;
+      gap: 10px;
+    }
+
+    .input-group label {
+      flex: 1;
+    }
+
+    .input-group input {
+      width: 100px;
+      text-align: center;
+    }
+
+    #inputs input:focus,
+    #controls input:focus {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    /* Chart containers */
+    #charts {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .chart-box {
+      position: relative;
+      width: 100%;
+      height: 360px;
+      border: 2px solid var(--accent);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .chart-box h3 {
+      margin: 10px 12px 0;
+      font-size: 16px;
+    }
+
+    .chart-box canvas {
+      position: absolute;
+      left: 0;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 100% !important;
+      height: 100% !important;
+    }
+
+    .control-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    #exportCsvBtn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* Tooltip for keys chart */
+    .chartjs-tooltip {
+      pointer-events: none;
+      position: absolute;
+      background: rgba(0, 0, 0, 0.85);
+      color: #fff;
+      border-radius: 4px;
+      padding: 8px;
+      font-size: 12px;
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+  <!-- ========== 🧰 Controls & Panels ========== -->
+  <div class="container">
+    <!-- Inputs -->
+    <div id="inputs" class="column">
+      <h1>Deduplication Simulator</h1>
+      <h2>Input Parameters</h2>
+      <fieldset>
+        <div class="input-group">
+          <label for="sourceSize">1. Daily Source Data Size (TiB)</label>
+          <input type="number" id="sourceSize" value="10" step="0.1" />
+        </div>
+        <div class="input-group">
+          <label for="changeRate">2. Daily Change Rate (%)</label>
+          <input type="number" id="changeRate" value="2" />
+        </div>
+        <div class="input-group">
+          <label for="dailyRetention">3. Daily Retention (days)</label>
+          <input type="number" id="dailyRetention" value="12" />
+        </div>
+        <div class="input-group">
+          <label for="weeklyRetention">4. Weekly Retention (count)</label>
+          <input type="number" id="weeklyRetention" value="4" />
+        </div>
+        <div class="input-group">
+          <label for="monthlyRetention">5. Monthly Retention (count)</label>
+          <input type="number" id="monthlyRetention" value="11" />
+        </div>
+        <div class="input-group">
+          <label for="yearlyRetention">6. Yearly Retention (count)</label>
+          <input type="number" id="yearlyRetention" value="7" />
+        </div>
+        <div class="input-group">
+          <label for="simulationMonths">7. Simulation Time (months)</label>
+          <input type="number" id="simulationMonths" value="89" />
+        </div>
+        <div class="input-group">
+          <label for="compression">8. Compression Savings (%)</label>
+          <input type="number" id="compression" value="50" step="1" />
+        </div>
+        <div class="input-group">
+          <label for="cloudDelay">9. Days Before Data Moves to Cloud</label>
+          <input type="number" id="cloudDelay" value="5" />
+        </div>
+        <div class="input-group">
+          <label for="initialCompression">10. Initial Backup Compression (%)</label>
+          <input type="number" id="initialCompression" value="10" step="1" />
+        </div>
+        <!-- 10a. Use Incrementals -->
+        <div class="input-group">
+          <label for="useIncrementals">11. Use Incremental Backups</label>
+          <input type="checkbox" id="useIncrementals" />
+        </div>
+        <!-- 10b. Full Backup Cadence (enabled when checkbox is ticked) -->
+        <div class="input-group">
+          <label for="fullSchedule">12. Full Backup Frequency</label>
+          <select id="fullSchedule" disabled>
+            <option value="7">Weekly</option>
+            <option value="14">Every 2 Weeks</option>
+            <option value="30" selected>Monthly</option>
+            <option value="60">Every 2 Months</option>
+            <option value="365">Yearly</option>
+          </select>
+        </div>
+      </fieldset>
+      <script>
+        const useIncrEl = document.getElementById('useIncrementals');
+        const fullSchedEl = document.getElementById('fullSchedule');
+        useIncrEl.addEventListener('change', () => {
+          fullSchedEl.disabled = !useIncrEl.checked;
+        });
+      </script>
+      <div id="controls">
+        <div class="control-row">
+          <button id="generateBtn">Generate Charts</button>
+          <button id="resetBtn" type="button">Reset Inputs</button>
+        </div>
+        <div class="control-row" style="margin-top:12px;">
+          <input id="reportName" type="text" placeholder="Server Name" value=""
+            style="width: 160px; padding:4px; font-size:0.9em;" />
+          <button id="exportCsvBtn" type="button" disabled>Export to CSV</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div id="stats" class="column">
+      <h1>Simulation Summary</h1>
+      <h2>Results</h2>
+      <p><strong>Total Logical Data Ingested:</strong> <span id="totalRawDataTiB">-</span> TiB</p>
+      <p><strong>Total Stored Data:</strong> <span id="storedDataOverTime">-</span> TiB</p>
+      <p><strong>Total logical Data held:</strong> <span id="heldRawDataTiB">-</span> TiB</p>
+      <p><strong>Number of Retained Backups:</strong> <span id="snapshotsHeld">-</span></p>
+      <p><strong>Deduplication Pre-Compression:</strong> <span id="dedupePreCompression">-</span>%</p>
+      <p><strong>Deduplication Post-Compression:</strong> <span id="finalEfficiency">-</span>%</p>
+      <p><strong>Total Cloud Data:</strong> <span id="totalCloud">-</span> TiB</p>
+      <p><strong>Total Local Data:</strong> <span id="totalLocal">-</span> TiB</p>
+      <p><strong>Full Backups (created / retained):</strong>
+        <span id="statFullCreated">-</span> / <span id="statFullRetained">-</span>
+      </p>
+      <p><strong>Incrementals (created / retained):</strong>
+        <span id="statIncrCreated">-</span> / <span id="statIncrRetained">-</span>
+      </p>
+
+
+      <div id="recommendedConfig">
+        <h2>Recommended Configuration</h2>
+        <p><strong>Base RAM:</strong> <span id="recKeyTierBase">–</span></p>
+        <p><strong>Dictionary Size:</strong> <span id="recKeyTierSize">–</span></p>
+        <p><strong>Additional RAM:</strong> <span id="recKeyTierAddRAM">–</span></p>
+        <p><strong>Shift:</strong> <span id="recKeyTierShift">–</span></p>
+        <p><strong>Page Shift:</strong> <span id="recKeyTierPage">–</span></p>
+        <p><strong>Meta-Data Size:</strong> <span id="totalAllMetaPlus">- GiB</span></p>
+      </div>
+    </div>
+
+    <!-- Dictionary panel -->
+    <div class="column" id="dict">
+      <h1>Dictionary & Meta-Data</h1>
+      <h2>Results</h2>
+      <p><strong>Required Keys:</strong> <span id="requiredKeys">-</span></p>
+      <p><strong>Total Max Keys Available:</strong> <span id="totalMaxKeys">-</span></p>
+      <p><strong>Used Keys Percentage:</strong> <span id="usedKeysPercent">-</span></p>
+      <p><strong>Base RAM Required:</strong> <span id="keyTierBase">-</span></p>
+      <p><strong>Dictionary Size Required:</strong> <span id="keyTierSize">-</span></p>
+      <p><strong>Additional RAM Required:</strong> <span id="keyTierAddRAM">-</span></p>
+      <p><strong>Bit Shift Setting:</strong> <span id="keyTierShift">-</span></p>
+      <p><strong>Page Shift Setting:</strong> <span id="keyTierPage">-</span></p>
+      <p><strong>Block Map Size:</strong> <span id="blockMapSize">-</span> GiB</p>
+      <p><strong>Local Reference Count Size:</strong> <span id="finalRefCountLocal">-</span> GiB</p>
+      <p><strong>Cloud Reference Count Size:</strong> <span id="finalRefCountCloud">-</span> GiB</p>
+      <p><strong>Total Reference Count Size:</strong> <span id="refCountFinal">-</span> GiB</p>
+      <p><strong>Total Meta-Data Size:</strong> <span id="totalAllMetaData">-</span> GiB</p>
+    </div>
+  </div>
+
+  <!-- ========== 📈 Charts ========== -->
+  <div id="charts">
+    <div class="chart-box">
+      <h3>Total Stored Data Over Time</h3><canvas id="storageChart"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>Local vs Cloud Storage Over Time</h3><canvas id="cloudChart"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>Deduplication Efficiency Over Time</h3><canvas id="dedupeChart"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>Required Keys Over Time</h3><canvas id="keysChart"></canvas>
+    </div>
+    <div id="keys-tooltip" class="chartjs-tooltip"></div>
+    <div class="chart-box">
+      <h3>Dictionary Tier Over Time</h3><canvas id="DictChart"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>Meta-Data Size Over Time</h3><canvas id="blockMapChart"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>Reference Count Size Over Time</h3><canvas id="refChart"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>Daily New Data: Uncompressed vs Compressed</h3><canvas id="deltaChart"></canvas>
+    </div>
+  </div>
+
+  <script>
+    // ========== 🔢 Constants & Lookup ==========
+    const keyLookupTable = [
+      { min: 0, max: 2863355222, Base_RAM: "4096MB", Size: "64GiB", Additional_RAM: "0MB", Shift: "19", Page_Shift: "12" },
+      { min: 2863355223, max: 5726710444, Base_RAM: "4096MB", Size: "128GiB", Additional_RAM: "0MB", Shift: "20", Page_Shift: "12" },
+      { min: 5726710445, max: 11453420886, Base_RAM: "8192MB", Size: "256GiB", Additional_RAM: "0MB", Shift: "21", Page_Shift: "12" },
+      { min: 11453420887, max: 22906841772, Base_RAM: "8192MB", Size: "384GiB", Additional_RAM: "1412MB", Shift: "22", Page_Shift: "12" },
+      { min: 22906841773, max: 45813683542, Base_RAM: "16384MB", Size: "640GiB", Additional_RAM: "2576MB", Shift: "23", Page_Shift: "12" },
+      { min: 45813683543, max: 91627367084, Base_RAM: "32768MB", Size: "1.52TiB", Additional_RAM: "4880MB", Shift: "24", Page_Shift: "12" },
+      { min: 91627367085, max: 183254734166, Base_RAM: "65536MB", Size: "2.176TiB", Additional_RAM: "9488MB", Shift: "25", Page_Shift: "12" },
+      { min: 183254734167, max: 366509468332, Base_RAM: "65536MB", Size: "4.224TiB", Additional_RAM: "18704MB", Shift: "26", Page_Shift: "12" }
+    ];
+
+    function sizeStrToGiB(s) {
+      if (!s || typeof s !== 'string') return 0;
+      const v = parseFloat(s);
+      if (s.endsWith('TiB')) return v * 1024;
+      if (s.endsWith('GiB')) return v;
+      return 0;
+    }
+
+    // ========== 🧮 Core Simulation ==========
+    function simulateRetention(params) {
+      const {
+        days, sourceSizeTiB, changeRate, compressionPercent,
+        dailyRetention, weeklyRetention, monthlyRetention,
+        yearlyRetention, cloudDelay, initialCompression,
+        useIncrementals = false, fullEveryDays = 30
+      } = params;
+
+      // ⏳ Time-series arrays
+      const storedDataOverTime = [];
+      const uncompressedDataOverTime = [];
+      const compressedDataOverTime = [];
+      const storedLocallyOverTime = [];
+      const storedInCloudOverTime = [];
+      const dedupeEfficiencyOverTime = [];
+      const dedupePreCompressionOverTime = [];
+      const retainedLogicalOverTime = [];
+      const retainedCountsOverTime = [];
+      const uncompressedLocalOverTime = [];
+      const uncompressedCloudOverTime = [];
+      const requiredKeysSeries = [];
+      const dictionarySizesOverTime = [];
+      const tierMetaOverTime = [];
+
+      // 📦 Backup log
+      const backupLog = [];
+      let lastSnapshot = sourceSizeTiB;
+      let fullsCreated = 0;
+      let incrementalsCreated = 0;
+
+      // 1️⃣ Generate backup log
+      for (let day = 0; day < days; day++) {
+        const isFull = !useIncrementals || day % fullEveryDays === 0;
+
+        const compressionRamp = Math.min(1, day / 3);
+        const effectiveCompression = compressionPercent * compressionRamp;
+        const logicalSize = isFull
+          ? lastSnapshot * (1 + changeRate)
+          : lastSnapshot * changeRate;
+
+        const dedupedSize = isFull
+          ? logicalSize
+          : logicalSize;
+
+        const compressedSize = dedupedSize * (1 - effectiveCompression);
+        const fullCompressedSize = logicalSize * (1 - effectiveCompression);
+
+        if (isFull) {
+          lastSnapshot = logicalSize;
+          fullsCreated++;
+        } else {
+          incrementalsCreated++;
+        }
+
+        const tiers = ['daily'];
+        if (day % 7 === 0) tiers.push('weekly');
+        if (day % 30 === 0) tiers.push('monthly');
+        if (day % 365 === 0) tiers.push('yearly');
+
+        backupLog.push({
+          day, logicalSize, dedupedSize, compressedSize, fullCompressedSize, isFull, tiers
+        });
+      }
+
+      // 2️⃣ Retention simulation
+      for (let currentDay = 0; currentDay < days; currentDay++) {
+        let totalLogical = 0;
+        let totalUncompressed = 0;
+        let totalCompressed = 0;
+        let localSum = 0;
+        let cloudSum = 0;
+        let uncompressedLocal = 0;
+        let uncompressedCloud = 0;
+        let retainedCount = 0;
+
+        for (const b of backupLog) {
+          const age = currentDay - b.day;
+          if (age < 0) continue;
+
+          const keep =
+            (age < dailyRetention) ||
+            (b.tiers.includes('weekly') && age < weeklyRetention * 7) ||
+            (b.tiers.includes('monthly') && age < monthlyRetention * 30) ||
+            (b.tiers.includes('yearly') && age < yearlyRetention * 365);
+          if (!keep) continue;
+
+          const contrib = (b.day === 0) ? b.fullCompressedSize : b.compressedSize;
+
+          totalLogical += b.logicalSize;
+          totalUncompressed += b.dedupedSize;
+          totalCompressed += contrib;
+          retainedCount++;
+
+          if (b.day === 0 || age < cloudDelay) {
+            localSum += contrib;
+            uncompressedLocal += b.dedupedSize;
+          } else {
+            cloudSum += contrib;
+            uncompressedCloud += b.dedupedSize;
+          }
+        }
+
+        storedDataOverTime.push(totalCompressed);
+        uncompressedDataOverTime.push(totalUncompressed);
+        compressedDataOverTime.push(totalCompressed);
+        storedLocallyOverTime.push(localSum);
+        storedInCloudOverTime.push(cloudSum);
+        uncompressedLocalOverTime.push(uncompressedLocal);
+        uncompressedCloudOverTime.push(uncompressedCloud);
+        retainedLogicalOverTime.push(totalLogical);
+        retainedCountsOverTime.push(retainedCount);
+
+        // efficiency
+        const postComp = totalLogical > 0 ? (totalLogical - totalCompressed) / totalLogical * 100 : 0;
+        const preComp = totalLogical > 0 ? (totalLogical - totalUncompressed) / totalLogical * 100 : 0;
+
+        dedupeEfficiencyOverTime.push(Math.max(0, postComp));
+        dedupePreCompressionOverTime.push(Math.max(0, preComp));
+      }
+
+      // 3️⃣ Final stats
+      const stats = {
+        totalLogicalTiB: sourceSizeTiB * days,
+        heldRawDataTiB: sourceSizeTiB * retainedCountsOverTime.at(-1),
+        snapshotsHeld: retainedCountsOverTime.at(-1),
+        totalUncompressedTiB: (uncompressedLocalOverTime.at(-1) || 0) + (uncompressedCloudOverTime.at(-1) || 0),
+        totalLocalStoredTiB: storedLocallyOverTime.at(-1) || 0,
+        totalCloudStoredTiB: storedInCloudOverTime.at(-1) || 0,
+        totalStoredTiB: (storedLocallyOverTime.at(-1) || 0) + (storedInCloudOverTime.at(-1) || 0),
+        dedupePreCompressionPct: dedupePreCompressionOverTime.at(-1) || 0,
+        dedupePostCompressionPct: dedupeEfficiencyOverTime.at(-1) || 0,
+        totalCompressedTiB: compressedDataOverTime.at(-1) || 0,
+        fullsCreated,
+        incrementalsCreated,
+        fullsRetained: backupLog.filter(b => b.isFull).length,
+        incrementalsRetained: backupLog.filter(b => !b.isFull).length
+      };
+      // 📖 Dictionary simulation
+      retainedLogicalOverTime.forEach(logicalTiB => {
+        const numKeys = Math.floor((logicalTiB * 1024 ** 3) / 32); // 32B blocks
+        requiredKeysSeries.push(numKeys);
+        const match = keyLookupTable.find(k => numKeys >= k.min && numKeys <= k.max) || {};
+        tierMetaOverTime.push(match);
+        dictionarySizesOverTime.push(match.Size || 'N/A');
+      });
+
+      // Final dictionary stats
+      const logicalDedupedTiB = stats.totalLogicalTiB - stats.totalStoredTiB;
+      const finalKeys = Math.floor((logicalDedupedTiB * 1024 ** 3) / 32);
+      const finalTier = keyLookupTable.find(k => finalKeys >= k.min && finalKeys <= k.max) || {};
+      const usedPct = finalTier.max ? finalKeys / finalTier.max * 100 : 0;
+      stats.dictionary = {
+        requiredKeys: finalKeys,
+        tier: finalTier,
+        usedPct
+      };
+
+      return {
+        storedDataOverTime,
+        uncompressedDataOverTime,
+        compressedDataOverTime,
+        storedLocallyOverTime,
+        storedInCloudOverTime,
+        dedupeEfficiencyOverTime,
+        dedupePreCompressionOverTime,
+        retainedLogicalOverTime,
+        retainedCountsOverTime,
+        uncompressedLocalOverTime,
+        uncompressedCloudOverTime,
+        requiredKeysSeries,
+        dictionarySizesOverTime,
+        tierMetaOverTime,
+        stats
+      };
+    }
+
+    // ========== 📊 Charts Helpers ==========
+    function baseChartOptions(title, xLabel, yLabel, yMax = null) {
+      return {
+        maintainAspectRatio: false,
+        responsive: true,
+        layout: { padding: { top: 10, right: 10, bottom: 10, left: 10 } },
+        plugins: {
+          legend: { labels: { color: '#ffffff' } },
+          title: {
+            display: true, text: title,
+            font: { size: 14, family: 'Arial, sans-serif' },
+            color: '#ffffff'
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: '#444444' },
+            ticks: { font: { size: 10, family: 'Arial, sans-serif' }, color: '#ffffff' },
+            title: { display: true, text: xLabel, font: { size: 12 }, color: '#ffffff' }
+          },
+          y: {
+            beginAtZero: true, max: yMax,
+            grid: { color: '#444444' },
+            ticks: { font: { size: 10, family: 'Arial, sans-serif' }, color: '#ffffff' },
+            title: { display: true, text: yLabel, font: { size: 12 }, color: '#ffffff' }
+          }
+        }
+      };
+    }
+
+    function buildMonthLabels(simMonths) {
+      return Array.from({ length: simMonths }, (_, i) => `Month ${i + 1}`);
+    }
+
+    function downsampleToMonthly(series, simMonths) {
+      const out = [];
+      for (let m = 0; m < simMonths; m++) {
+        const idx = (m + 1) * 30 - 1;
+        out.push(series[Math.min(idx, series.length - 1)] || 0);
+      }
+      return out;
+    }
+
+    // ========== 🧷 UI Helpers ==========
+    function readInputs() {
+      const get = (id) => document.getElementById(id);
+      return {
+        sourceSizeTiB: parseFloat(get('sourceSize').value),
+        changeRate: parseFloat(get('changeRate').value) / 100,
+        dailyRetention: parseInt(get('dailyRetention').value, 10),
+        weeklyRetention: parseInt(get('weeklyRetention').value, 10),
+        monthlyRetention: parseInt(get('monthlyRetention').value, 10),
+        yearlyRetention: parseInt(get('yearlyRetention').value, 10),
+        simMonths: parseInt(get('simulationMonths').value, 10),
+        compressionPercent: parseFloat(get('compression').value) / 100,
+        cloudDelay: parseInt(get('cloudDelay').value, 10),
+        initialCompression: parseFloat(get('initialCompression').value) / 100
+      };
+    }
+
+    function updateStats(stats, blockMapOverTime, dailyRefCountsLocal, dailyRefCountsCloud) {
+      const el = (id) => document.getElementById(id);
+      const finalLocal = Array.isArray(dailyRefCountsLocal) ? dailyRefCountsLocal.at(-1) || 0 : 0;
+      const finalCloud = Array.isArray(dailyRefCountsCloud) ? dailyRefCountsCloud.at(-1) || 0 : 0;
+      const finalTotal = finalLocal + finalCloud;
+      const lastBlockMapGiB = Array.isArray(blockMapOverTime) ? blockMapOverTime.at(-1) || 0 : 0;
+
+
+      el('finalRefCountLocal').textContent = finalLocal.toFixed(2);
+      el('finalRefCountCloud').textContent = finalCloud.toFixed(2);
+      el('refCountFinal').textContent = finalTotal.toFixed(2);
+
+      el('totalRawDataTiB').textContent = stats.totalLogicalTiB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      el('storedDataOverTime').textContent = stats.totalStoredTiB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      el('totalCloud').textContent = stats.totalCloudStoredTiB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      el('totalLocal').textContent = stats.totalLocalStoredTiB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      el('heldRawDataTiB').textContent = stats.heldRawDataTiB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      el('snapshotsHeld').textContent = (stats.snapshotsHeld ?? 0).toLocaleString();
+
+
+      el('dedupePreCompression').textContent = stats.dedupePreCompressionPct.toFixed(2);
+      el('finalEfficiency').textContent = stats.dedupePostCompressionPct.toFixed(2);
+
+      el('blockMapSize').textContent = lastBlockMapGiB.toFixed(2);
+
+      // dictionary stats & recommendation
+      // dictionary stats & recommendation
+      const dict = stats.dictionary || {};
+      const requiredKeys = dict.requiredKeys || 0;
+      const tier = dict.tier || {};
+      const usedPct = dict.usedPct || 0;
+
+      el('requiredKeys').textContent = requiredKeys.toLocaleString();
+      el('totalMaxKeys').textContent = (tier.max || 0).toLocaleString();
+
+      const usedNode = el('usedKeysPercent');
+      usedNode.textContent = usedPct.toFixed(2) + '%';
+      usedNode.style.color = usedPct >= 90 ? 'red' : usedPct >= 80 ? 'yellow' : 'green';
+
+
+      el('keyTierBase').textContent = tier.Base_RAM || 'N/A';
+      el('keyTierSize').textContent = tier.Size || 'N/A';
+      el('keyTierAddRAM').textContent = tier.Additional_RAM || 'N/A';
+      el('keyTierShift').textContent = tier.Shift || 'N/A';
+      el('keyTierPage').textContent = tier.Page_Shift || 'N/A';
+
+      // recommend next tier if ≥90%
+      const idx = keyLookupTable.findIndex(k => k.Size === tier.Size && k.Base_RAM === tier.Base_RAM);
+      const recTier = (usedPct >= 90 && idx >= 0 && idx < keyLookupTable.length - 1) ? keyLookupTable[idx + 1] : tier;
+      const recColor = (recTier === tier) ? 'inherit' : 'green';
+      document.getElementById('recKeyTierBase').textContent = recTier.Base_RAM || 'N/A';
+      document.getElementById('recKeyTierSize').textContent = recTier.Size || 'N/A';
+      document.getElementById('recKeyTierAddRAM').textContent = recTier.Additional_RAM || 'N/A';
+      document.getElementById('recKeyTierShift').textContent = recTier.Shift || 'N/A';
+      document.getElementById('recKeyTierPage').textContent = recTier.Page_Shift || 'N/A';
+      ['recKeyTierBase', 'recKeyTierSize', 'recKeyTierAddRAM', 'recKeyTierShift', 'recKeyTierPage'].forEach(id => {
+        document.getElementById(id).style.color = recColor;
+      });
+
+      // show created/retained counts if you added those spans
+      const setStat = (id, value) => {
+        const node = document.getElementById(id);
+        if (node) node.textContent = value;
+      };
+
+      setStat('statFullCreated', stats.fullsCreated);
+      setStat('statFullRetained', stats.fullsRetained);
+      setStat('statIncrCreated', stats.incrementalsCreated);
+      setStat('statIncrRetained', stats.incrementalsRetained);
+
+
+
+      const dictSizeGiB = sizeStrToGiB(recTier.Size);
+      const totalAllMetaData = lastBlockMapGiB + finalTotal + dictSizeGiB;
+      document.getElementById('totalAllMetaData').textContent = totalAllMetaData.toFixed(2);
+      const totalAllMetaPlus = totalAllMetaData * 1.1;
+      const plusEl = document.getElementById('totalAllMetaPlus');
+      plusEl.textContent = totalAllMetaPlus.toFixed(2) + ' GiB';
+      plusEl.style.color = 'green';
+    }
+
+    // ========== 🖼️ Chart Renderers ==========
+    const Charts = {
+      destroyAll() {
+        ['chart1', 'chart2', 'chart3', 'chart4', 'chart5', 'chart6', 'chart7', 'chart8'].forEach(id => {
+          if (window[id] instanceof Chart) window[id].destroy();
+        });
+      },
+
+      storedTotal(daysLabels, storedLocally, storedCloud) {
+        const total = storedLocally.map((v, i) => v + storedCloud[i]);
+        window.chart1 = new Chart(document.getElementById('storageChart').getContext('2d'), {
+          type: 'line',
+          data: { labels: daysLabels, datasets: [{ label: 'Stored Data (TiB)', data: total, borderColor: 'orange', fill: true, tension: 0.4, pointRadius: 0 }] },
+          options: baseChartOptions('Total Stored Data Over Time', 'Day', 'TiB')
+        });
+      },
+
+      dedupe(daysLabels, postPct) {
+        window.chart2 = new Chart(document.getElementById('dedupeChart').getContext('2d'), {
+          type: 'line',
+          data: { labels: daysLabels, datasets: [{ label: 'Dedup Efficiency (%)', data: postPct, borderColor: 'lightgreen', fill: false, tension: 0.4, pointRadius: 0 }] },
+          options: baseChartOptions('Deduplication & Compression Efficiency Over Time', 'Day', '% Efficiency', 100)
+        });
+      },
+
+      requiredKeys(monthLabels, monthlyKeys, monthlyMeta) {
+        window.chart3 = new Chart(document.getElementById('keysChart').getContext('2d'), {
+          type: 'line',
+          data: { labels: monthLabels, datasets: [{ label: 'Required Keys', data: monthlyKeys, borderColor: '#8b5cf6', fill: true, tension: 0.4, pointRadius: 0, backgroundColor: '#b295f444' }] },
+          options: {
+            ...baseChartOptions('Required Keys Over Time', 'Month', 'Keys'),
+            plugins: {
+              ...baseChartOptions().plugins,
+              tooltip: {
+                enabled: false,
+                external: function (ctx) {
+                  const tooltipEl = document.getElementById('keys-tooltip');
+                  const model = ctx.tooltip;
+                  if (model.opacity === 0) { tooltipEl.style.display = 'none'; return; }
+                  const idx = model.dataPoints[0].dataIndex;
+                  const keys = model.dataPoints[0].parsed.y;
+                  const meta = monthlyMeta[idx] || {};
+                  const used = meta.max ? (monthlyKeys[idx] / meta.max) * 100 : 0;
+                  const usedColor = used >= 90 ? 'red' : used >= 80 ? 'yellow' : 'lightgreen';
+                  tooltipEl.innerHTML = `<div>Keys: ${keys.toLocaleString()}</div><div style="color:${usedColor}">Used: ${used.toFixed(2)}%</div>`;
+                  const canvas = ctx.chart.canvas.getBoundingClientRect();
+                  tooltipEl.style.left = canvas.left + window.pageXOffset + model.caretX + 'px';
+                  tooltipEl.style.top = canvas.top + window.pageYOffset + model.caretY + 'px';
+                  tooltipEl.style.display = 'block';
+                }
+              }
+            }
+          }
+        });
+      },
+
+      dictionaryTier(monthLabels, monthlyDict, monthlyRecSizes, monthlyMeta) {
+        // build y category
+        const sizeCategories = [...new Set(keyLookupTable.map(e => e.Size))].sort((a, b) => {
+          const toGiB = s => s.includes('TiB') ? parseFloat(s) * 1024 : parseFloat(s);
+          return toGiB(a) - toGiB(b);
+        });
+        const ctx = document.getElementById('DictChart').getContext('2d');
+        window.chart4 = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: monthLabels,
+            datasets: [
+              { label: 'Dictionary Tier', data: monthlyDict.map((y, i) => ({ x: monthLabels[i], y })), borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.2)', fill: true, stepped: true, pointRadius: 0 },
+              { label: 'Recommended Tier', data: monthlyRecSizes.map((y, i) => ({ x: monthLabels[i], y })), borderColor: '#10b981', fill: false, stepped: true, pointRadius: 0 }
+            ]
+          },
+          options: {
+            ...baseChartOptions('Dictionary Transitions Over Time', 'Month', 'Tier'),
+            plugins: {
+              legend: { labels: { color: '#fff' } },
+              title: { display: true, text: 'Dictionary Transitions Over Time', color: '#fff' },
+              tooltip: {
+                callbacks: {
+                  label: (ctx) => {
+                    const idx = ctx.dataIndex;
+                    const isRec = ctx.dataset.label === 'Recommended Tier';
+                    const meta = (isRec ? monthlyMeta.rec[idx] : monthlyMeta.base[idx]) || {};
+                    const usedKeys = monthlyMeta.keys[idx] || 0;
+                    const usedPct = meta.max ? (usedKeys / meta.max) * 100 : 0;
+                    return [
+                      `Size: ${meta.Size || 'N/A'}`,
+                      `Base RAM: ${meta.Base_RAM || 'N/A'}`,
+                      `Additional RAM: ${meta.Additional_RAM || 'N/A'}`,
+                      `Shift: ${meta.Shift || 'N/A'}`,
+                      `Page Shift: ${meta.Page_Shift || 'N/A'}`,
+                      `Used Keys: ${usedKeys.toLocaleString()} (${usedPct.toFixed(2)}%)`
+                    ];
+                  }
+                }
+              }
+            },
+            scales: {
+              x: { type: 'category', ticks: { color: '#fff' }, grid: { color: '#444' }, title: { display: true, text: 'Months', color: '#fff' } },
+              y: { type: 'category', reverse: true, labels: sizeCategories, ticks: { color: '#fff' }, grid: { color: '#444' }, title: { display: true, text: 'Tier Level', color: '#fff' } }
+            }
+          }
+        });
+      },
+
+      localVsCloud(daysLabels, local, cloud) {
+        const opts = baseChartOptions('Local vs Cloud Storage Over Time', 'Day', 'TiB');
+        opts.interaction = { mode: 'index', intersect: false };
+        opts.plugins.tooltip = {
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)} TiB`,
+            footer: (items) => {
+              const total = items.reduce((s, i) => s + i.parsed.y, 0);
+              return `Total: ${total.toFixed(2)} TiB`;
+            }
+          }
+        };
+        window.chart5 = new Chart(document.getElementById('cloudChart').getContext('2d'), {
+          type: 'line',
+          data: {
+            labels: daysLabels,
+            datasets: [
+              { label: 'Cloud (TiB)', data: cloud, borderColor: '#4ade80', fill: 'origin', tension: 0.4, pointRadius: 0 },
+              { label: 'Local (TiB)', data: local, borderColor: '#60a5fa', fill: '-1', tension: 0.4, pointRadius: 0 }
+            ]
+          },
+          options: opts
+        });
+      },
+
+      blockMap(daysLabels, blockMapGiB) {
+        window.chart6 = new Chart(document.getElementById('blockMapChart').getContext('2d'), {
+          type: 'line',
+          data: { labels: daysLabels, datasets: [{ label: 'Block Map Size (GiB)', data: blockMapGiB, borderColor: '#f59e0b', fill: true, tension: 0.4, pointRadius: 0 }] },
+          options: baseChartOptions('Block Map Size Over Time', 'Day', 'GiB')
+        });
+      },
+
+      deltas(daysLabels, uncompressedDelta, compressedDelta) {
+        const labels = daysLabels.slice(1);
+        const uncmp = uncompressedDelta.slice(1);
+        const cmp = compressedDelta.slice(1);
+        const maxD = Math.max(...uncmp, ...cmp);
+        const opts = baseChartOptions('Daily New Data: Uncompressed vs Compressed', 'Day', 'TiB');
+        opts.scales.y.max = maxD * 1.1;
+        window.chart7 = new Chart(document.getElementById('deltaChart').getContext('2d'), {
+          type: 'line',
+          data: {
+            labels,
+            datasets: [
+              { label: 'Uncompressed Δ (TiB)', data: uncmp, borderColor: 'cyan', fill: false, tension: 0.4, pointRadius: 0 },
+              { label: 'Compressed Δ (TiB)', data: cmp, borderColor: 'magenta', fill: false, tension: 0.4, pointRadius: 0 }
+            ]
+          },
+          options: opts
+        });
+      },
+
+      refCounts(monthLabels, mLocal, mCloud, mTotal) {
+        window.chart8 = new Chart(document.getElementById('refChart').getContext('2d'), {
+          type: 'line',
+          data: {
+            labels: monthLabels,
+            datasets: [
+              { label: 'Total Reference Counts (GiB)', data: mTotal, borderColor: '#ef4444', fill: false, tension: 0.4 },
+              { label: 'Local RefCount (GiB)', data: mLocal, borderColor: '#3b82f6', fill: false, tension: 0.4 },
+              { label: 'Cloud RefCount (GiB)', data: mCloud, borderColor: '#10b981', fill: false, tension: 0.4 }
+            ]
+          },
+          options: baseChartOptions('Reference Counts Footprint Over Time', 'Month', 'GiB')
+        });
+      }
+    };
+
+    // ========== 🚀 Main Flow ==========
+    function generateCharts() {
+      const input = readInputs();
+      const days = input.simMonths * 30;
+      const daysLabels = Array.from({ length: days }, (_, i) => `Day ${i + 1}`);
+      const useIncrementals = document.getElementById('useIncrementals').checked;
+      const fullEveryDays = parseInt(document.getElementById('fullSchedule').value || '30', 10);
+
+      const sim = simulateRetention({
+        days,
+        sourceSizeTiB: input.sourceSizeTiB,
+        changeRate: input.changeRate,
+        compressionPercent: input.compressionPercent,
+        dailyRetention: input.dailyRetention,
+        weeklyRetention: input.weeklyRetention,
+        monthlyRetention: input.monthlyRetention,
+        yearlyRetention: input.yearlyRetention,
+        cloudDelay: input.cloudDelay,
+        initialCompression: input.initialCompression,
+        useIncrementals: input.useIncrementals,
+        fullEveryDays: input.fullEveryDays,
+        uncompressedDataOverTime: input.uncompressedDataOverTime
+      });
+
+      const {
+        storedLocallyOverTime, storedInCloudOverTime,
+        compressedDataOverTime,
+        dedupeEfficiencyOverTime, dedupePreCompressionOverTime,
+        retainedCountsOverTime,
+        blockMapOverTime,
+        dailyUncompressedDelta, dailyCompressedDelta,
+        uncompressedLocalOverTime, uncompressedCloudOverTime,
+        requiredKeysSeries, dictionarySizesOverTime, tierMetaOverTime,
+        dailyRefCounts, dailyRefCountsLocal, dailyRefCountsCloud,
+        uncompressedDataOverTime,
+        stats
+      } = sim;
+
+      // Update Stats Panel
+      updateStats(stats, blockMapOverTime, dailyRefCountsLocal, dailyRefCountsCloud);
+
+      // Build monthly series for keys/dictionary/refcounts
+      const monthLabels = buildMonthLabels(input.simMonths);
+      const monthlyKeys = downsampleToMonthly(requiredKeysSeries, input.simMonths);
+      const monthlyDict = downsampleToMonthly(dictionarySizesOverTime, input.simMonths);
+      const monthlyMetaBase = downsampleToMonthly(tierMetaOverTime, input.simMonths);
+
+      // compute recommended monthly tier if ≥ 90%
+      const monthlyRecMeta = monthlyMetaBase.map((meta, i) => {
+        if (!meta || !meta.max) return meta || {};
+        const usedPct = (monthlyKeys[i] / meta.max) * 100;
+        const idx = keyLookupTable.findIndex(k => k.Size === meta.Size && k.Base_RAM === meta.Base_RAM);
+        if (usedPct >= 90 && idx >= 0 && idx < keyLookupTable.length - 1) {
+          return keyLookupTable[idx + 1];
+        }
+        return meta;
+      });
+      const monthlyRecSizes = monthlyRecMeta.map(m => (m && m.Size) ? m.Size : 'N/A');
+
+      // Charts
+      Charts.destroyAll();
+      Charts.storedTotal(daysLabels, storedLocallyOverTime, storedInCloudOverTime);
+      Charts.dedupe(daysLabels, dedupeEfficiencyOverTime);
+      Charts.requiredKeys(monthLabels, monthlyKeys, monthlyMetaBase);
+      Charts.dictionaryTier(monthLabels, monthlyDict, monthlyRecSizes, {
+        base: monthlyMetaBase, rec: monthlyRecMeta, keys: monthlyKeys
+      });
+      Charts.localVsCloud(daysLabels, storedLocallyOverTime, storedInCloudOverTime);
+      Charts.blockMap(daysLabels, blockMapOverTime);
+      Charts.deltas(daysLabels, dailyUncompressedDelta, dailyCompressedDelta);
+
+      // monthly refcounts
+      const mLocal = downsampleToMonthly(dailyRefCountsLocal, input.simMonths);
+      const mCloud = downsampleToMonthly(dailyRefCountsCloud, input.simMonths);
+      const mTotal = mLocal.map((v, i) => v + mCloud[i]);
+      Charts.refCounts(monthLabels, mLocal, mCloud, mTotal);
+    }
+
+    // ========== 💾 CSV Export ==========
+    function exportCsv() {
+      const name = (document.getElementById('reportName').value || 'Report').trim();
+      const input = readInputs();
+      const days = input.simMonths * 30;
+      const daysLabels = Array.from({ length: days }, (_, i) => `Day ${i + 1}`);
+      const monthLabels = buildMonthLabels(input.simMonths);
+
+      const sim = simulateRetention({
+        days,
+        sourceSizeTiB: input.sourceSizeTiB,
+        changeRate: input.changeRate,
+        compressionPercent: input.compressionPercent,
+        dailyRetention: input.dailyRetention,
+        weeklyRetention: input.weeklyRetention,
+        monthlyRetention: input.monthlyRetention,
+        yearlyRetention: input.yearlyRetention,
+        cloudDelay: input.cloudDelay,
+        initialCompression: input.initialCompression
+      });
+
+      const {
+        storedLocallyOverTime, storedInCloudOverTime,
+        compressedDataOverTime, dedupeEfficiencyOverTime, dedupePreCompressionOverTime,
+        requiredKeysSeries, blockMapOverTime,
+        uncompressedLocalOverTime, uncompressedCloudOverTime,
+        dailyRefCounts, dailyRefCountsLocal, dailyRefCountsCloud,
+        dictionarySizesOverTime, tierMetaOverTime,
+        stats
+      } = sim;
+
+      const monthlyKeys = downsampleToMonthly(requiredKeysSeries, input.simMonths);
+      const monthlyDict = downsampleToMonthly(dictionarySizesOverTime, input.simMonths);
+      const monthlyMetaBase = downsampleToMonthly(tierMetaOverTime, input.simMonths);
+
+      const rows = [];
+      rows.push([name], []);
+      rows.push(['Input Parameter', 'Value']);
+      rows.push(['Source Data Size (TiB)', input.sourceSizeTiB]);
+      rows.push(['Change Rate (%)', (input.changeRate * 100).toFixed(2)]);
+      rows.push(['Daily Retention (days)', input.dailyRetention]);
+      rows.push(['Weekly Retention (count)', input.weeklyRetention]);
+      rows.push(['Monthly Retention (count)', input.monthlyRetention]);
+      rows.push(['Yearly Retention (count)', input.yearlyRetention]);
+      rows.push(['Simulation Time (months)', input.simMonths]);
+      rows.push(['Compression Savings (%)', (input.compressionPercent * 100).toFixed(2)]);
+      rows.push(['Days Before Data Moves to Cloud', input.cloudDelay]);
+      rows.push(['Initial Backup Compression (%)', (input.initialCompression * 100).toFixed(2)]);
+      rows.push([]);
+      rows.push(['Results', 'Value']);
+      rows.push(['Total Logical (TiB)', (stats.totalLogicalTiB || 0).toFixed(2)]);
+      rows.push(['Total Stored (TiB)', (stats.totalStoredTiB || 0).toFixed(2)]);
+      rows.push(['Total Cloud (TiB)', (stats.totalCloudStoredTiB || 0).toFixed(2)]);
+      rows.push(['Held Raw (TiB)', (stats.heldRawDataTiB || 0).toFixed(2)]);
+      rows.push(['Snapshots Held', stats.snapshotsHeld || 0]);
+      rows.push(['Dedup Pre-Compression (%)', (stats.dedupePreCompressionPct || 0).toFixed(2)]);
+      rows.push(['Dedup Post-Compression (%)', (stats.dedupePostCompressionPct || 0).toFixed(2)]);
+      rows.push(['Required Keys', stats.dictionary.requiredKeys || 0]);
+      rows.push(['Used Keys (%)', (stats.dictionary.usedPct || 0).toFixed(2)]);
+      const lastBm = blockMapOverTime.at(-1) || 0;
+      const finalLocal = dailyRefCountsLocal.at(-1) || 0;
+      const finalCloud = dailyRefCountsCloud.at(-1) || 0;
+      const finalTotal = finalLocal + finalCloud;
+      rows.push(['Block Map Size (GiB)', lastBm.toFixed(2)]);
+      rows.push(['Final RefCount Local (GiB)', finalLocal.toFixed(2)]);
+      rows.push(['Final RefCount Cloud (GiB)', finalCloud.toFixed(2)]);
+      rows.push(['Total RefCount (GiB)', finalTotal.toFixed(2)]);
+      rows.push([]);
+      rows.push(['Monthly Series']);
+      rows.push(['Month', 'Dictionary Tier', 'Required Keys']);
+      monthLabels.forEach((label, i) => {
+        rows.push([label, (monthlyDict[i] || 'N/A'), (monthlyKeys[i] || 0)]);
+      });
+      rows.push([]);
+      rows.push(['Daily Series']);
+      rows.push(['Day', 'Local Stored (TiB)', 'Cloud Stored (TiB)', 'Total Stored (TiB)', 'Dedup Efficiency (%)', 'Pre-Comp Efficiency (%)', 'Required Keys', 'Block Map (GiB)']);
+      daysLabels.forEach((d, i) => {
+        rows.push([
+          d,
+          (storedLocallyOverTime[i] || 0).toFixed(2),
+          (storedInCloudOverTime[i] || 0).toFixed(2),
+          (compressedDataOverTime[i] || 0).toFixed(2),
+          (dedupeEfficiencyOverTime[i] || 0).toFixed(2),
+          (dedupePreCompressionOverTime[i] || 0).toFixed(2),
+          (requiredKeysSeries[i] || 0),
+          (blockMapOverTime[i] || 0).toFixed(2)
+        ]);
+      });
+
+      const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\r\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const safe = name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50) || 'Report';
+      a.href = url; a.download = `${safe}_dedupe_simulation.csv`; a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // ========== 🧩 Wiring ==========
+    document.getElementById('generateBtn').addEventListener('click', () => setTimeout(generateCharts, 0));
+    document.getElementById('resetBtn').addEventListener('click', () => {
+      document.querySelectorAll('#inputs input, #inputs select').forEach(el => el.value = el.defaultValue);
+      generateCharts();
+    });
+    (function autoRedraw() {
+      let t;
+      document.querySelectorAll('#inputs input, #inputs select').forEach(el => {
+        el.addEventListener('input', () => {
+          clearTimeout(t); t = setTimeout(generateCharts, 800);
+        });
+      });
+    })();
+    const reportInput = document.getElementById('reportName');
+    const exportBtn = document.getElementById('exportCsvBtn');
+    function toggleExportBtn() { exportBtn.disabled = reportInput.value.trim() === ''; }
+    toggleExportBtn();
+    reportInput.addEventListener('input', toggleExportBtn);
+    document.getElementById('exportCsvBtn').addEventListener('click', exportCsv);
+
+    // First draw on load
+    window.addEventListener('load', generateCharts);
+  </script>
+</body>
+
+</html>

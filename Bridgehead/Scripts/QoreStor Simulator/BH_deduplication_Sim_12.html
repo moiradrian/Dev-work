@@ -1,0 +1,1307 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Deduplication Simulator</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js">
+        Chart.defaults.font.family = 'Arial, sans-serif';
+        Chart.defaults.font.size = 12;
+        Chart.defaults.color = '#ffffff';
+    </script>
+    <style>
+        /* CSS config */
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #333333;
+            color: #ffffff;
+        }
+
+        canvas {
+            background-color: #333333;
+        }
+
+        .form-group {
+            margin-bottom: 10px;
+            max-width: 400px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        input {
+            padding: 5px;
+            width: 100%;
+        }
+
+        .chart-container {
+            width: 100%;
+            max-width: 800px;
+            margin-top: 30px;
+        }
+
+        fieldset {
+            border: none;
+        }
+
+        .input-group {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: nowrap;
+            margin-bottom: 12px;
+        }
+
+        .input-group label {
+            flex: 1;
+            white-space: nowrap;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+            /* fill the .input-group width */
+        }
+
+        .input-group input .label-text {
+            flex: 1;
+            text-align: left;
+            margin-right: 10px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .input-group input {
+            width: 80px;
+            text-align: center;
+        }
+
+        .container {
+            display: flex;
+            gap: 40px;
+            align-items: flex-start;
+            margin-bottom: 40px;
+        }
+
+        .column {
+            flex: 1;
+            max-width: 30%;
+        }
+
+        .chart-box {
+            position: relative;
+            width: 100%;
+            height: 400px;
+            position: relative;
+            border: 2px solid #FB4F14;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-sizing: border-box;
+            padding: 0;
+            overflow: hidden;
+
+        }
+
+        .chart-box canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            width: 100% !important;
+            height: 100% !important;
+            color: #333333;
+        }
+
+        #charts {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        .chart-wrapper {
+            display: flex;
+            flex-direction: column;
+            gap: 30px;
+            padding-right: 20px;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Container for input variables-->
+    <div class="container">
+        <!-- Inputs -->
+        <div id="inputs" class="column">
+            <h1>Deduplication Simulator</h1>
+            <h2>Input Parameters</h2>
+            <fieldset>
+                <div class="input-group">
+                    <label for="sourceSize">1. Source Data Size (TiB)</label>
+                    <input type="number" id="sourceSize" value="10" step="0.1" />
+                </div>
+                <div class="input-group">
+                    <label for="changeRate">2. Daily Change Rate (%)</label>
+                    <input type="number" id="changeRate" value="2" />
+                </div>
+                <div class="input-group">
+                    <label for="dailyRetention">3. Daily Retention (days)</label>
+                    <input type="number" id="dailyRetention" value="12" />
+                </div>
+                <div class="input-group">
+                    <label for="weeklyRetention">4. Weekly Retention (count)</label>
+                    <input type="number" id="weeklyRetention" value="4" />
+                </div>
+                <div class="input-group">
+                    <label for="monthlyRetention">5. Monthly Retention (count)</label>
+                    <input type="number" id="monthlyRetention" value="11" />
+                </div>
+                <div class="input-group">
+                    <label for="yearlyRetention">6. Yearly Retention (count)</label>
+                    <input type="number" id="yearlyRetention" value="7" />
+                </div>
+                <div class="input-group">
+                    <label for="simulationMonths">7. Simulation Time (months)</label>
+                    <input type="number" id="simulationMonths" value="89" />
+                </div>
+                <div class="input-group">
+                    <label for="compression">8. Compression Savings (%)</label>
+                    <input type="number" id="compression" value="50" step="1" />
+                </div>
+                <div class="input-group">
+                    <label for="cloudDelay">9. Days Before Data Moves to Cloud</label>
+                    <input type="number" id="cloudDelay" value="5" />
+                </div>
+                <div class="input-group">
+                    <label for="initialCompression">10. Initial Backup compression (%)</label>
+                    <input type="number" id="initialCompression" value="10" step="1" />
+                </div>
+            </fieldset>
+            <div id="controls">
+                <!-- First row: Generate & Reset -->
+                <div class="control-row">
+                    <button id="generateBtn">Generate Charts</button>
+                    <button id="resetBtn" type="button">Reset Inputs</button>
+                </div>
+
+                <!-- Second row: Report Name & Export -->
+                <div class="control-row" style="margin-top:16px;">
+                    <input id="reportName" type="text" placeholder="Server Name" value=""
+                        style="width: 132px; padding:4px; font-size:0.9em;" />
+                    <button id="exportCsvBtn" type="button">Export to CSV</button>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Stats Panel -->
+        <div id="stats" class="column">
+            <h1>Simulation Summary</h1>
+            <h2>Results</h2>
+            <p><strong>Total Logical Data Ingested:</strong> <span id="totalRawDataTiB">-</span>TiB</p>
+            <p><strong>Total Stored Data:</strong> <span id="storedDataOverTime">-</span>TiB</p>
+            <p><strong>Total logical Data held: </strong><span id="heldRawDataTiB">-</span>TiB</p>
+            <p><strong>Number of Retained Backups: </strong><span id="snapshotsHeld">-</span></p>
+            <p><strong>Deduplication Pre-Compression:</strong> <span id="dedupePreCompression">-</span>%</p>
+            <p><strong>Deduplication Post-Compression:</strong> <span id="finalEfficiency">-</span>%</p>
+            <p><strong>Total Cloud Data:</strong> <span id="totalCloud">-</span>TiB</p>
+            <p><strong>Total Local Data:</strong> <span id="totalLocal">-</span>TiB</p>
+        </div>
+        <div class="column" id="dict">
+            <h1>Dictionary & Meta-Data</h1>
+            <h2>Results</h2>
+            <p><strong>Required Keys :</strong> <span id="requiredKeys">-</span></p>
+            <p><strong>Total Max Keys Available:</strong> <span id="totalMaxKeys">-</span></p>
+            <p><strong>Used Keys Percentage:</strong> <span id="usedKeysPercent">-</span></p>
+            <p><strong>Base RAM Required:</strong> <span id="keyTierBase">-</span></p>
+            <p><strong>Dictionary Size Required:</strong> <span id="keyTierSize">-</span></p>
+            <p><strong>Additional RAM Required:</strong> <span id="keyTierAddRAM">-</span></p>
+            <p><strong>Bit Shift Setting:</strong> <span id="keyTierShift">-</span></p>
+            <p><strong>Page Shift Setting:</strong> <span id="keyTierPage">-</span></p>
+            <p><strong>Meta Data Size:</strong> <span id="blockMapSize">-</span>GiB</p>
+            <div id="recommendedConfig">
+                <h2>Recommended Configuration</h2>
+                <p><strong>Base RAM:</strong> <span id="recKeyTierBase">–</span></p>
+                <p><strong>Dictionary Size:</strong> <span id="recKeyTierSize">–</span></p>
+                <p><strong>Additional RAM:</strong> <span id="recKeyTierAddRAM">–</span></p>
+                <p><strong>Shift:</strong> <span id="recKeyTierShift">–</span></p>
+                <p><strong>Page Shift:</strong> <span id="recKeyTierPage">–</span></p>
+            </div>
+        </div>
+    </div>
+</body>
+<!-- Chart space -->
+<div id="charts">
+    <div class="chart-wrapper">
+        <div class="chart-box">
+            <h3>Stored Data Over Time</h3>
+            <canvas id="storageChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <h3>Deduplication Efficiency Over Time</h3>
+            <canvas id="dedupeChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <h3>Required Keys Over Time</h3>
+            <canvas id="keysChart"></canvas>
+        </div>
+        <div id="keys-tooltip" class="chartjs-tooltip"
+            style="pointer-events:none; position:absolute; background:rgba(0,0,0,0.8); color:#fff; border-radius:4px; padding:8px; font-size:12px; display:none;">
+        </div>
+
+        <div class="chart-box">
+            <h3>Dictionary Tier Over Time</h3>
+            <canvas id="DictChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <h3>Local vs Cloud Storage Over Time</h3>
+            <canvas id="cloudChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <h3>Meta-Data Size Over Time</h3>
+            <canvas id="blockMapChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <h3>Daily New Data: Uncompressed vs Compressed</h3>
+            <canvas id="deltaChart"></canvas>
+        </div>
+    </div>
+</div>
+
+
+<script>
+    // ────────────────────────────────────────────────
+    // Lookup table for dictionary sizing
+    const keyLookupTable = [
+        { min: 0, max: 2_863_355_222, Base_RAM: "4096MB", Size: "64GiB", Additional_RAM: "0", Shift: "19", Page_Shift: "12" },
+        { min: 2_863_355_223, max: 5_726_710_444, Base_RAM: "4096MB", Size: "128GiB", Additional_RAM: "0MB", Shift: "20", Page_Shift: "12" },
+        { min: 5_726_710_445, max: 11_453_420_886, Base_RAM: "8192MB", Size: "256GiB", Additional_RAM: "0MB", Shift: "21", Page_Shift: "12" },
+        { min: 11_453_420_887, max: 22_906_841_772, Base_RAM: "8192MB", Size: "384GiB", Additional_RAM: "1412MB", Shift: "22", Page_Shift: "12" },
+        { min: 22_906_841_773, max: 45_813_683_542, Base_RAM: "16384MB", Size: "640GiB", Additional_RAM: "2576MB", Shift: "23", Page_Shift: "12" },
+        { min: 45_813_683_543, max: 91_627_367_084, Base_RAM: "32768MB", Size: "1.52TiB", Additional_RAM: "4880MB", Shift: "24", Page_Shift: "12" },
+        { min: 91_627_367_085, max: 183_254_734_166, Base_RAM: "65536MB", Size: "2.176TiB", Additional_RAM: "9488MB", Shift: "25", Page_Shift: "12" },
+        { min: 183_254_734_167, max: 366_509_468_332, Base_RAM: "65536MB", Size: "4.224TiB", Additional_RAM: "18704MB", Shift: "26", Page_Shift: "12" }
+    ];
+
+    /**
+    * Simulate dedupe + compression + retention + local/cloud split
+    *
+    * days                – total days to simulate (e.g. simMonths * 30)
+    * sourceSizeTiB       – initial full backup size (TiB)
+    * changeRate          – fractional daily change (e.g. 0.02 for 2%)
+    * compressionPercent  – fractional compression rate (e.g. 0.50 for 50%)
+    * dailyRetention      – how many days to keep daily deltas
+    * weeklyRetention     – how many weekly snapshots to keep
+    * monthlyRetention    – how many monthly snapshots to keep
+    * yearlyRetention     – how many yearly snapshots to keep
+    * cloudDelay          – days before a snapshot “graduates” from local to cloud
+    * Initial Backup Compression - compression simulation entry for first backup reduction
+ */
+    function simulateRetention(
+        days, sourceSizeTiB, changeRate, compressionPercent,
+        dailyRetention, weeklyRetention, monthlyRetention,
+        yearlyRetention, cloudDelay, initialCompression
+    ) {
+        // ── set up ─────────────────────────────────────────────
+        const backupLog = [];                 // will hold every day’s snapshot metadata
+        const storedLocallyOverTime = [];     // TiB stored locally after retention
+        const storedInCloudOverTime = [];     // TiB in cloud after retention
+        const dedupeEfficiencyOverTime = [];  // post-compression dedupe %
+        const dedupePreCompressionOverTime = [];
+        const retainedCountsOverTime = [];    // # snapshots kept
+        const compressedDataOverTime = [];    // total compressed bytes after retention
+        const uncompressedLocalOverTime = [];
+        const uncompressedCloudOverTime = [];
+        const blockMapOverTime = [];
+        const requiredKeysSeries = [];
+        const dictionarySizesOverTime = [];
+        const tierMetaOverTime = [];
+        const newTotalUncompressedOverTime = [];
+
+        // for delta-charts
+        const dailyUncompressedDelta = [];
+        const dailyCompressedDelta = [];
+
+        // build your cutoff windows
+        const dailyCut = dailyRetention;
+        const weeklyCut = dailyCut + weeklyRetention * 7;
+        const monthlyCut = weeklyCut + monthlyRetention * 30;
+        const yearlyCut = monthlyCut + yearlyRetention * 365;
+
+        // running accumulators
+        let lastSnapshotTiB = sourceSizeTiB;  // logical (pre-delta) running total
+        let lastCompressedArchive = 0;              // (we’ll build day-0 below)
+
+        // ── 1️⃣ build a log of every full snapshot (delta + tiers) ─────────────
+        for (let day = 0; day < days; day++) {
+            // apply 10% on day 0, user‐pct thereafter
+            const effectiveCompression = (day === 0)
+                ? initialCompression
+                : compressionPercent;
+
+            // dedupe delta: day 0 = full, days >0 = `changeRate` of original
+            const deltaTiB = (day === 0)
+                ? sourceSizeTiB
+                : sourceSizeTiB * changeRate;
+
+            // new logical total = previous + today's delta
+            const logicalTiB = (day === 0)
+                ? sourceSizeTiB
+                : lastSnapshotTiB + deltaTiB;
+
+            // compressed bytes of _this delta_ and of the entire archive
+            const compressedDeltaTiB = deltaTiB * (1 - effectiveCompression);
+            const fullCompressedTiB = logicalTiB * (1 - effectiveCompression);
+
+            // compound the compressed‐archive running total
+            lastCompressedArchive = (day === 0)
+                ? fullCompressedTiB
+                : lastCompressedArchive + compressedDeltaTiB;
+
+            // stash for your “delta” chart
+            dailyUncompressedDelta.push(deltaTiB);
+            dailyCompressedDelta.push(compressedDeltaTiB);
+
+            // remember to advance your snapshot total
+            lastSnapshotTiB = logicalTiB;
+
+            // assign retention tiers
+            const tiers = ['daily'];
+            if (day % 7 === 0) tiers.push('weekly');
+            if (day % 30 === 0) tiers.push('monthly');
+            if (day % 365 === 0) tiers.push('yearly');
+
+            backupLog.push({
+                day,
+                deltaTiB,
+                logicalTiB,
+                compressedDeltaTiB,
+                fullCompressedTiB,
+                tiers
+            });
+        }
+
+        // ── 2️⃣ walk through each “today” and apply retention + local/cloud split ────
+        for (let today = 0; today < days; today++) {
+            let keptCount = 0;
+            let sumCompressed = 0;  // sum of compressed bytes for snapshots we KEEP
+            let sumUncompress = 0;  // sum of raw-deltas  ”     “
+            let localCompTiB = 0;
+            let cloudCompTiB = 0;
+            let localUncompTiB = 0;
+            let cloudUncompTiB = 0;
+
+            for (const snap of backupLog) {
+                const age = today - snap.day;
+                if (age < 0) continue;  // future
+
+                // should we keep it?
+                const keep =
+                    (age < dailyCut)
+                    || (age >= dailyCut && age < weeklyCut && snap.tiers.includes('weekly'))
+                    || (age >= weeklyCut && age < monthlyCut && snap.tiers.includes('monthly'))
+                    || (age >= monthlyCut && age < yearlyCut && snap.tiers.includes('yearly'));
+
+                if (!keep) continue;
+
+                keptCount++;
+                // accumulate raw delta
+                sumUncompress += snap.deltaTiB;
+
+                const cTiB = (snap.day === 0)
+                    ? snap.fullCompressedTiB
+                    : snap.compressedDeltaTiB;
+
+                sumCompressed += cTiB;
+
+                // 1) Day-0 full backup always stays local, and *also* gets copied at cloudDelay
+                if (snap.day === 0) {
+                    // always count it locally
+                    localUncompTiB += snap.deltaTiB;
+                    localCompTiB += snap.fullCompressedTiB;
+
+                    // once it ages to cloudDelay, you copy it (but do NOT remove it locally)
+                    if (age >= cloudDelay) {
+                        cloudUncompTiB += snap.deltaTiB;
+                        cloudCompTiB += snap.fullCompressedTiB;
+                    }
+
+                    // 2) For snapshots 1…N, deltas live locally for cloudDelay days…
+                } else if (age < cloudDelay) {
+                    localUncompTiB += snap.deltaTiB;
+                    localCompTiB += snap.compressedDeltaTiB;
+
+                    // 3) …and then move into the cloud thereafter
+                } else {
+                    cloudUncompTiB += snap.deltaTiB;
+                    cloudCompTiB += snap.compressedDeltaTiB;
+                }
+            }
+
+            // push per-day series
+            retainedCountsOverTime.push(keptCount);
+            compressedDataOverTime.push(sumCompressed);
+            uncompressedLocalOverTime.push(localUncompTiB);
+            uncompressedCloudOverTime.push(cloudUncompTiB);
+            storedLocallyOverTime.push(localCompTiB);
+            storedInCloudOverTime.push(cloudCompTiB);
+
+            // 1) rawHeld = full-backup size × # snapshots kept
+            const rawHeld = sourceSizeTiB * keptCount;
+
+            // 2) Pre-compression dedupe: (rawHeld – sumUncompress) / rawHeld
+            const prePct = rawHeld > 0
+                ? ((rawHeld - sumUncompress) / rawHeld) * 100
+                : 0;
+
+            // 3) Post-compression dedupe: (rawHeld – sumCompressed) / rawHeld
+            const postPct = rawHeld > 0
+                ? ((rawHeld - sumCompressed) / rawHeld) * 100
+                : 0;
+
+            /* // 4) Debug log
+            console.log(
+                `Day ${today}: rawHeld=${rawHeld.toFixed(2)}TiB, ` +
+                `sumUncomp=${sumUncompress.toFixed(2)}TiB, ` +
+                `sumComp=${sumCompressed.toFixed(2)}TiB, ` +
+                `preEff=${prePct.toFixed(2)}%, postEff=${postPct.toFixed(2)}%`
+            ); */
+
+
+            dedupePreCompressionOverTime.push(Math.max(0, prePct));
+            dedupeEfficiencyOverTime.push(Math.max(0, postPct));
+
+            // block-map size = rawHeldTiB × 3 GiB per TiB (as before)
+            blockMapOverTime.push((sourceSizeTiB * keptCount) * 3);
+
+            // compute & push daily key requirements:
+            const footprintTiB = localCompTiB + cloudCompTiB;
+            const numKeys = Math.floor(footprintTiB * (1024 ** 3) / 8);
+            requiredKeysSeries.push(numKeys);
+
+            // look up its tier
+            const match = keyLookupTable.find(
+                k => numKeys >= k.min && numKeys <= k.max
+            ) || {};
+            dictionarySizesOverTime.push(match.Size || 'N/A');
+            tierMetaOverTime.push(match);
+        }
+        // ── 3️⃣ after the retention build your total-uncompressed series ─────────
+        // combine local+cloud raw deltas into one series:
+        for (let i = 0; i < uncompressedLocalOverTime.length; i++) {
+            newTotalUncompressedOverTime.push(
+                uncompressedLocalOverTime[i]
+                + uncompressedCloudOverTime[i]
+            );
+        }
+
+        // ── 3️⃣ assemble final stats & return all series ─────────────────────────────
+        const stats = {
+            totalLogicalTiB: sourceSizeTiB * days,
+            heldRawDataTiB: sourceSizeTiB * retainedCountsOverTime.at(-1),
+            snapshotsHeld: retainedCountsOverTime.at(-1),
+            totalUncompressedTiB: uncompressedLocalOverTime.at(-1) + uncompressedCloudOverTime.at(-1),
+            totalLocalStoredTiB: storedLocallyOverTime.at(-1),
+            totalCloudStoredTiB: storedInCloudOverTime.at(-1),
+            totalStoredTiB: storedLocallyOverTime.at(-1) + storedInCloudOverTime.at(-1),
+            dedupePreCompressionPct: dedupePreCompressionOverTime.at(-1),
+            dedupePostCompressionPct: dedupeEfficiencyOverTime.at(-1),
+            totalCompressedTiB: compressedDataOverTime.at(-1)
+        };
+
+        // final dictionary stats
+        const finalKeys = requiredKeysSeries.at(-1) || 0;
+        const finalTier = tierMetaOverTime.at(-1) || { max: 0, Size: 'N/A', Base_RAM: 'N/A', Additional_RAM: 'N/A', Shift: 'N/A', Page_Shift: 'N/A' };
+        const usedPct = finalTier.max
+            ? (finalKeys / finalTier.max) * 100
+            : 0;
+
+        stats.dictionary = {
+            requiredKeys: finalKeys,
+            tier: finalTier,
+            usedPct
+        };
+
+        return {
+            // time-series
+            storedLocallyOverTime,
+            storedInCloudOverTime,
+            compressedDataOverTime,
+            dedupeEfficiencyOverTime,
+            dedupePreCompressionOverTime,
+            retainedCountsOverTime,
+            blockMapOverTime,
+            dailyUncompressedDelta,
+            dailyCompressedDelta,
+            uncompressedLocalOverTime,
+            uncompressedCloudOverTime,
+            requiredKeysSeries,
+            dictionarySizesOverTime,
+            tierMetaOverTime,
+            newTotalUncompressedOverTime,
+
+            // final stats object
+            stats
+        };
+    }
+
+    /**
+     * Returns a standard Chart.js options object
+     * @param {string} title – Chart title
+     * @param {string} xLabel – X-axis label
+     * @param {string} yLabel – Y-axis label
+     * @param {number|null} yMax – Optional max for Y-axis
+     */
+    function getChartOptions(title, xLabel, yLabel, yMax = null) {
+        return {
+            maintainAspectRatio: false,
+            responsive: true,
+            layout: {
+                padding: { top: 10, right: 10, bottom: 10, left: 10 }
+            },
+            plugins: {
+                legend: { labels: { color: '#ffffff' } },
+                title: {
+                    display: true,
+                    text: title,
+                    font: { size: 14, family: 'Arial, sans-serif' },
+                    color: '#ffffff'
+                }
+            },
+            scales: {
+                x: {
+                    grid: { color: '#444444' },
+                    ticks: {
+                        font: { size: 10, family: 'Arial, sans-serif' },
+                        color: '#ffffff'
+                    },
+                    title: {
+                        display: true,
+                        text: xLabel,
+                        font: { size: 12, family: 'Arial, sans-serif' },
+                        color: '#ffffff'
+                    }
+                },
+                y: {
+                    grid: { color: '#444444' },
+                    beginAtZero: true,
+                    max: yMax,
+                    ticks: {
+                        font: { size: 10, family: 'Arial, sans-serif' },
+                        color: '#ffffff'
+                    },
+                    title: {
+                        display: true,
+                        text: yLabel,
+                        font: { size: 12, family: 'Arial, sans-serif' },
+                        color: '#ffffff'
+                    }
+                }
+            }
+        };
+    }
+    // ────────────────────────────────────────────────
+    // The main entrypoint to chart the simulation.
+    function generateCharts() {
+        // gather inputs
+        const sourceSizeTiB = parseFloat(document.getElementById('sourceSize').value);
+        const changeRate = parseFloat(document.getElementById('changeRate').value) / 100;
+        const dailyRetention = parseInt(document.getElementById('dailyRetention').value, 10);
+        const weeklyRetention = parseInt(document.getElementById('weeklyRetention').value, 10);
+        const monthlyRetention = parseInt(document.getElementById('monthlyRetention').value, 10);
+        const yearlyRetention = parseInt(document.getElementById('yearlyRetention').value, 10);
+        const simMonths = parseInt(document.getElementById('simulationMonths').value, 10);
+        const compressionPct = parseFloat(document.getElementById('compression').value) / 100;
+        const cloudDelay = parseInt(document.getElementById('cloudDelay').value, 10);
+        const initialCompression = parseFloat(document.getElementById('initialCompression').value) / 100;
+
+        const days = simMonths * 30;
+        const daysLabels = Array.from({ length: days }, (_, i) => `Day ${i + 1}`);
+
+        //Call simulateRetention() function for required information with gathered variable
+        const {
+            storedDataOverTime, storedLocallyOverTime, storedInCloudOverTime,
+            dedupeEfficiencyOverTime, dedupePreCompressionOverTime,
+            retainedLogicalOverTime, requiredKeysSeries,
+            dictionarySizesOverTime, tierMetaOverTime, heldRawDataOverTime, blockMapOverTime, stats, storedTiB,
+            uncompressedDataOverTime, compressedDataOverTime, uncompressedLocalOverTime, uncompressedCloudOverTime,
+            newTotalUncompressedOverTime, dailyUncompressedDelta, dailyCompressedDelta
+        } = simulateRetention(
+            days, sourceSizeTiB, changeRate, compressionPct,
+            dailyRetention, weeklyRetention, monthlyRetention,
+            yearlyRetention, cloudDelay, initialCompression
+        );
+        //End of Simulation call.
+
+        // Create Stats from retention time series
+        stats.dedupePostCompressionPct = dedupeEfficiencyOverTime.at(-1) || 0;
+        stats.dedupePreCompressionPct = dedupePreCompressionOverTime.at(-1) || 0;
+        stats.totalCompressedTiB = compressedDataOverTime.at(-1) || 0;
+
+        const allDeltas = dailyUncompressedDelta.concat(dailyCompressedDelta);
+        const deltaMax = Math.max(...allDeltas);
+        const deltaMin = Math.min(...allDeltas);
+
+
+        //total uncomoressed unique data each day
+        const totalUncompressedOverTime = uncompressedLocalOverTime.map(
+            (loc, i) => loc + uncompressedCloudOverTime[i]
+        );
+
+        // final “raw held” TiB from your loop
+        const finalRawHeldTiB = stats.heldRawDataTiB;
+
+
+        // final total unique-but-uncompressed footprint
+        const finalUncomp = totalUncompressedOverTime.at(-1) || 0;
+
+
+        // pre-compression efficiency
+        stats.dedupePreCompressionPct = finalRawHeldTiB > 0
+            ? ((finalRawHeldTiB - finalUncomp) / finalRawHeldTiB) * 100
+            : 0;
+
+
+        // monthly down-sampling
+        const monthLabels = Array.from({ length: simMonths }, (_, i) => `Month ${i + 1}`);
+
+        // End of month alighnment for required keys and required dict sizing
+        const daysCount = requiredKeysSeries.length;
+        const lastIdx = daysCount - 1;
+
+        const monthlyKeys = monthLabels.map((_, m) => {
+            // ideal end-of-month index
+            const ideal = (m + 1) * 30 - 1;
+            // clamp so we never overshoot the last day
+            const idx = Math.min(ideal, lastIdx);
+            return requiredKeysSeries[idx] || 0;
+        });
+
+        const monthlyDict = monthLabels.map((_, m) => {
+            const ideal = (m + 1) * 30 - 1;
+            const idx = Math.min(ideal, lastIdx);
+            return dictionarySizesOverTime[idx] || 'N/A';
+        });
+
+        const monthlyMeta = monthLabels.map((_, m) => {
+            const ideal = (m + 1) * 30 - 1;
+            const idx = Math.min(ideal, lastIdx);
+            return tierMetaOverTime[idx] || {};
+        });
+
+        /* // Logging to check values - comment out if not required
+        console.log({
+            daysCount,
+            lastIdx,
+            monthLabels,
+            monthlyKeys,
+            lastRequiredKey: requiredKeysSeries[lastIdx],
+            lastMonthlyKey: monthlyKeys[monthlyKeys.length - 1]
+        }); */
+
+        //calculate total stored data
+        const finalLocalTiB = storedLocallyOverTime.at(-1);
+        const finalCloudTiB = storedInCloudOverTime.at(-1);
+
+        // ─── Update Stats Panel ──────────────
+        const totLogical = stats.totalLogicalTiB;
+        const totUncomp = stats.totalUncompressedTiB;
+        const totStored = stats.totalStoredTiB;
+        const totCloud = stats.totalCloudStoredTiB;
+        const heldRawDataTiB = stats.heldRawDataTiB;
+
+        //document.getElementById('totalRawDataTiB').textContent = totLogical.toFixed(2);
+        document.getElementById('totalRawDataTiB').textContent = totLogical.toLocaleString(2);
+        document.getElementById('storedDataOverTime').textContent = stats.totalStoredTiB.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+        document.getElementById('dedupePreCompression').textContent = stats.dedupePreCompressionPct.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+        document.getElementById('finalEfficiency').textContent = stats.dedupePostCompressionPct.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+        document.getElementById('totalCloud').textContent = totCloud.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+        // Update “Total Local Stored”:
+        document.getElementById('totalLocal').textContent = finalLocalTiB.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+        document.getElementById('heldRawDataTiB').textContent = heldRawDataTiB.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+        document.getElementById('snapshotsHeld').textContent = stats.snapshotsHeld.toLocaleString();
+        // grab the final block-map size from the timeseries
+        const lastBlockMapGiB = blockMapOverTime.at(-1) || 0;
+        document.getElementById('blockMapSize').textContent = lastBlockMapGiB.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+
+        // dictionary final
+        const { requiredKeys, tier, usedPct } = stats.dictionary;
+        document.getElementById('requiredKeys').textContent = stats.dictionary.requiredKeys.toLocaleString();
+        document.getElementById('totalMaxKeys').textContent = (tier.max || 0).toLocaleString();
+        document.getElementById('usedKeysPercent').textContent = usedPct.toFixed(2);
+        // ─── Update Used Keys Percent ───────────────────────
+        //const usedPct = stats.dictionary.usedPct;
+        const usedEl = document.getElementById('usedKeysPercent');
+        usedEl.textContent = usedPct.toFixed(2) + '%';
+
+        // turn red if ≥90%, otherwise default (inherit)
+        if (usedPct >= 90) {
+            usedEl.style.color = 'red';
+        } else if (usedPct >= 80) {
+            usedEl.style.color = 'yellow';
+        } else {
+            usedEl.style.color = 'green';  // fall back to whatever your CSS says
+        }
+        document.getElementById('keyTierBase').textContent = tier.Base_RAM || 'N/A';
+        document.getElementById('keyTierSize').textContent = tier.Size || 'N/A';
+        document.getElementById('keyTierAddRAM').textContent = tier.Additional_RAM || 'N/A';
+        document.getElementById('keyTierShift').textContent = tier.Shift || 'N/A';
+        document.getElementById('keyTierPage').textContent = tier.Page_Shift || 'N/A';
+
+        // Use the stat from the dictionary so it's always defined
+        const pctUsed = stats.dictionary.usedPct;
+        const currentTier = stats.dictionary.tier;
+        const idx = keyLookupTable.findIndex(
+            k => k.Size === currentTier.Size &&
+                k.Base_RAM === currentTier.Base_RAM
+        );
+
+        // Pick the next tier if you’re over 90%
+        let recTier = currentTier;
+        if (pctUsed >= 90 && idx >= 0 && idx < keyLookupTable.length - 1) {
+            recTier = keyLookupTable[idx + 1];
+        }
+        // determine if we actually recommended the *next* tier
+        const recommendedUp = pctUsed >= 90 && idx >= 0 && idx < keyLookupTable.length - 1;
+
+        // pick your highlight color (or use any valid CSS color)
+        const recColor = recommendedUp ? 'green' : 'inherit';
+        const recEls = {
+            Base: document.getElementById('recKeyTierBase'),
+            Size: document.getElementById('recKeyTierSize'),
+            AddRAM: document.getElementById('recKeyTierAddRAM'),
+            Shift: document.getElementById('recKeyTierShift'),
+            Page: document.getElementById('recKeyTierPage'),
+        };
+
+        recEls.Base.textContent = recTier.Base_RAM || 'N/A';
+        recEls.Size.textContent = recTier.Size || 'N/A';
+        recEls.AddRAM.textContent = recTier.Additional_RAM || 'N/A';
+        recEls.Shift.textContent = recTier.Shift || 'N/A';
+        recEls.Page.textContent = recTier.Page_Shift || 'N/A';
+
+        // apply your color to each
+        Object.values(recEls).forEach(el => {
+            el.style.color = recColor;
+        });
+
+        // ─── Render Charts ────────────────────────────
+        // destroy old charts - clean for new charts
+        ['chart1', 'chart2', 'chart3', 'chart4', 'chart5', 'chart6', 'chart7'].forEach(id => {
+            if (window[id] instanceof Chart) window[id].destroy();
+        });
+
+        // Chart 1: Stored Data
+        const totalStoredOverTime = storedLocallyOverTime.map(
+            (loc, i) => loc + storedInCloudOverTime[i]
+        );
+        window.chart1 = new Chart(
+            document.getElementById('storageChart').getContext('2d'),
+            {
+                type: 'line',
+                data: {
+                    labels: daysLabels, datasets: [{
+                        label: 'Stored Data (TiB)', data: totalStoredOverTime,
+                        borderColor: 'orange', fill: true, tension: 0.5, pointRadius: 0
+                    }]
+                }
+                , options: getChartOptions('Total Stored Data Over Time', 'Day', 'TiB')
+            }
+        );
+
+        // Chart 2: Dedup Efficiency
+        window.chart2 = new Chart(
+            document.getElementById('dedupeChart').getContext('2d'),
+            {
+                type: 'line',
+                data: {
+                    labels: daysLabels, datasets: [{
+                        label: 'Dedup Efficiency (%)', data: dedupeEfficiencyOverTime,
+                        borderColor: 'lightgreen', fill: false, tension: 0.5, pointRadius: 0
+                    }]
+                }
+                , options: getChartOptions('Deduplication & Compression Efficiency Over Time', 'Day', '% Efficiency', 100)
+            }
+        );
+
+        // Chart 3: Required Keys (monthly)
+        window.chart3 = new Chart(
+            document.getElementById('keysChart').getContext('2d'),
+            {
+                type: 'line',
+                data: {
+                    labels: monthLabels, datasets: [{
+                        label: 'Required Keys', data: monthlyKeys,
+                        borderColor: '#8b5cf6', fill: true, tension: 0.5,
+                        backgroundColor: '#b295f444'
+                    }]
+                },
+                options: {
+                    ...getChartOptions('Required Keys Over Time', 'Month', 'Keys'),
+                    plugins: {
+                        legend: {
+                            labels: {
+                                color: '#ffffff'
+                            }
+                        },
+                        tooltip: {
+                            enabled: false,
+                            external: function (context) {
+                                // Tooltip element
+                                let tooltipEl = document.getElementById('keys-tooltip');
+                                // Hide if no tooltip
+                                const tooltipModel = context.tooltip;
+                                if (tooltipModel.opacity === 0) {
+                                    tooltipEl.style.display = 'none';
+                                    return;
+                                }
+                                // Set text
+                                const idx = tooltipModel.dataPoints[0].dataIndex;
+                                const keys = tooltipModel.dataPoints[0].formattedValue;
+                                const meta = monthlyMeta[idx] || {};
+                                const used = meta.max
+                                    ? (monthlyKeys[idx] / meta.max) * 100
+                                    : 0;
+                                // Build HTML
+                                const usedColor = used >= 90 ? 'red' : used >= 80 ? 'yellow' : 'lightgreen';
+                                tooltipEl.innerHTML = `
+                                <div>Keys: ${keys}</div>
+                                <div style="color:${usedColor}">Used: ${used.toFixed(2)}%</div>
+                                `;
+                                // Position it
+                                const canvas = context.chart.canvas;
+                                const position = canvas.getBoundingClientRect();
+                                tooltipEl.style.left = position.left + window.pageXOffset + tooltipModel.caretX + 'px';
+                                tooltipEl.style.top = position.top + window.pageYOffset + tooltipModel.caretY + 'px';
+                                tooltipEl.style.display = 'block';
+                            }
+                        }
+                    }
+                }
+            }
+        );
+
+        // Chart 4: Dictionary Tier (monthly)
+        // 1️⃣ Build catagory list
+        const sizeCategories = keyLookupTable.map(e => e.Size);
+        const uniqueSizeCategories = [...new Set(sizeCategories)].sort((a, b) => {
+            const toGiB = s => s.includes("TiB") ? parseFloat(s) * 1024 : parseFloat(s);
+            return toGiB(a) - toGiB(b);
+        });
+
+        // 2️⃣ Define your per-chart “baseOpts”
+        const baseOpts4 = {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { labels: { color: "#ffffff" } },
+                title: { display: true, text: "Dictionary Transitions Over Time", color: "#ffffff" },
+                tooltip: {
+                    callbacks: {
+                        label: ctx => {
+                            // `tierMetaOverTime` must be the array you returned from simulateRetention
+                            const meta = monthlyMeta[ctx.dataIndex] || {};
+                            return [
+                                `Size: ${meta.Size || "N/A"}`,
+                                `Base RAM: ${meta.Base_RAM || "N/A"}`,
+                                `Additional RAM: ${meta.Additional_RAM || "N/A"}`,
+                                `Shift: ${meta.Shift || "N/A"}`,
+                                `Page Shift: ${meta.Page_Shift || "N/A"}`
+                            ];
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    type: "category",
+                    labels: monthLabels,           // your array of ["Month 1","Month 2",…]
+                    ticks: { color: "#ffffff" },
+                    grid: { color: "#444444" },
+                    title: { display: true, text: "Months", color: "#ffffff" }
+                },
+                y: {
+                    type: "category",
+                    reverse: true,
+                    labels: uniqueSizeCategories,  // from step 1
+                    ticks: { color: "#ffffff" },
+                    grid: { color: "#444444" },
+                    title: { display: true, text: "Tier Level", color: "#ffffff" }
+                }
+            }
+        };
+
+        // 3️⃣ Finally, create the chart itself:
+        const ctx4 = document
+            .getElementById("DictChart")
+            .getContext("2d");
+
+        window.chart4 = new Chart(ctx4, {
+            type: "line",
+            data: {
+                labels: monthLabels,
+                datasets: [{
+                    label: "Dictionary Tier",
+                    data: monthlyDict.map((size, i) => ({
+                        x: monthLabels[i],
+                        y: size
+                    })),
+                    borderColor: "#f59e0b",
+                    backgroundColor: "rgba(245, 158, 11, 0.2)",
+                    fill: true,
+                    stepped: true
+                }]
+            },
+            options: baseOpts4
+        });
+
+        // Custom tool tip for chart 5 - local & cloud consumption totals
+        // build a custom options object for chart5
+
+        const cloudOpts = getChartOptions('Local vs Cloud Storage', 'Day', 'TiB');
+        cloudOpts.interaction = {
+            mode: 'index',    // show both lines on hover
+            intersect: false
+        };
+        cloudOpts.plugins.tooltip = {
+            callbacks: {
+                // use the parsed (plotted) y-value, not raw
+                label: ctx => {
+                    const val = ctx.parsed.y;
+                    return `${ctx.dataset.label}: ${val.toFixed(2)} TiB`;
+                },
+                footer: items => {
+                    // sum up parsed.y so the total matches what you see on the chart
+                    const total = items.reduce((sum, item) =>
+                        sum + item.parsed.y
+                        , 0);
+                    return `Total: ${total.toFixed(2)} TiB`;
+                }
+            }
+        };
+
+        /* // debug chart 5 right before window.chart5 = new Chart(…)
+        console.log('Day labels:', daysLabels);
+        console.log('Local series:', storedLocallyOverTime);
+        console.log('Cloud series:', storedInCloudOverTime);
+        */
+
+
+        // Chart 5: Local vs Cloud
+        window.chart5 = new Chart(
+            document.getElementById('cloudChart').getContext('2d'),
+            {
+                type: 'line',
+                data: {
+                    labels: daysLabels, datasets: [
+                        {
+                            label: 'Cloud (TiB)', data: storedInCloudOverTime,
+                            borderColor: '#4ade80',
+                            fill: origin, tension: 0.5, pointRadius: 0,
+
+                        },
+                        {
+                            label: 'Local (TiB)', data: storedLocallyOverTime,
+                            borderColor: '#60a5fa',
+                            fill: -1, tension: 0.5, pointRadius: 0
+                        }
+                    ]
+                }
+
+                //options: getChartOptions('Local vs Cloud Storage', 'Day', 'TiB')
+                , options: cloudOpts
+            }
+        );
+        // Chart 6: Meta-Data Size Over Time
+        window.chart6 = new Chart(
+            document.getElementById('blockMapChart').getContext('2d'),
+            {
+                type: 'line',
+                data: {
+                    labels: daysLabels,
+                    datasets: [{
+                        label: 'Meta-Data Size (GiB)',
+                        data: blockMapOverTime,
+                        borderColor: '#f59e0b',
+                        fill: true,
+                        tension: 0.5, pointRadius: 0
+                    }]
+                },
+                options: getChartOptions('Meta-Data Size Over Time', 'Day', 'GiB')
+            }
+        );
+
+        // drop the index-0 “Day 0” datapoint since your deltas really start on Day 1
+        const deltaLabels = daysLabels.slice(1);
+        const uncmp = dailyUncompressedDelta.slice(1);
+        const cmp = dailyCompressedDelta.slice(1);
+
+        // compute min/max on your trimmed arrays (optional)
+        const allD = uncmp.concat(cmp);
+        const maxD = Math.max(...allD);
+        const deltaOpts = getChartOptions(
+            'Daily New Data: Uncompressed vs Compressed',
+            'Day',
+            'TiB'
+        );
+        deltaOpts.scales.y.max = maxD * 1.1;
+
+        window.chart7 = new Chart(
+            document.getElementById('deltaChart').getContext('2d'),
+            {
+                type: 'line',
+                data: {
+                    labels: deltaLabels,
+                    datasets: [
+                        {
+                            label: 'Uncompressed Delta Δ (TiB)',
+                            data: uncmp,
+                            borderColor: 'cyan',
+                            tension: 0.5,
+                            pointRadius: 0,
+                            fill: false
+                        },
+                        {
+                            label: 'Compressed Delta Δ (TiB)',
+                            data: cmp,
+                            borderColor: 'magenta',
+                            tension: 0.5,
+                            pointRadius: 0,
+                            fill: false
+                        }
+                    ]
+                },
+                options: deltaOpts
+            }
+        );
+    }
+    //When Generate Charts button is pushed..
+    document.getElementById('generateBtn')
+        .addEventListener('click', () => {
+            //return instantly...
+            setTimeout(generateCharts,0);
+        });
+
+    // When reset button is pushed…
+    // Reset all inputs back to their original defaults, then redraw
+    document.getElementById('resetBtn')
+        .addEventListener('click', () => {
+            // grab every input/select in the controls panel
+            document.querySelectorAll('#inputs input, #inputs select')
+                .forEach(el => {
+                    // reset to whatever was in the HTML “value=” or “selected=” by default
+                    el.value = el.defaultValue;
+                });
+
+            // re‐run the charts with those restored defaults
+            generateCharts();
+        });
+
+    // ─── Auto–refresh on input change (2 s debounce) ───
+    ; (function () {
+        let redrawTimer;
+        // Listen on every input or select in your parameters panel
+        const inputs = document.querySelectorAll('#inputs input, #inputs select');
+        inputs.forEach(el => {
+            el.addEventListener('input', () => {
+                clearTimeout(redrawTimer);
+                // wait 2 seconds after the last keystroke before redrawing
+                redrawTimer = setTimeout(() => {
+                    generateCharts();
+                }, 2000);
+            });
+        });
+    })();
+    // 1️⃣ Hook up the Export CSV button
+    document.getElementById('exportCsvBtn')
+        .addEventListener('click', exportCsv);
+
+    function exportCsv() {
+
+
+
+        // 2️⃣ Grab your data from the last simulation run
+        // assume these arrays & stats are in scope or you re–call simulateRetention here
+        // ── A) Grab the report name input ──
+        const reportName = document.getElementById('reportName').value.trim() || 'Report';
+        // ── 1) Re-read all your inputs ──
+        const sourceSizeTiB = parseFloat(document.getElementById('sourceSize').value);
+        const changeRate = parseFloat(document.getElementById('changeRate').value) / 100;
+        const dailyRetention = parseInt(document.getElementById('dailyRetention').value, 10);
+        const weeklyRetention = parseInt(document.getElementById('weeklyRetention').value, 10);
+        const monthlyRetention = parseInt(document.getElementById('monthlyRetention').value, 10);
+        const yearlyRetention = parseInt(document.getElementById('yearlyRetention').value, 10);
+        const compressionPct = parseFloat(document.getElementById('compression').value) / 100;
+        const cloudDelay = parseInt(document.getElementById('cloudDelay').value, 10);
+        const initialCompression = parseFloat(document.getElementById('initialCompression').value) / 100;
+
+        const simMonths = parseInt(document.getElementById('simulationMonths').value, 10);
+        const days = simMonths * 30;    // exactly as in generateCharts()
+        // Rebuild the same daysLabels you use in generateCharts:
+        const daysLabels = Array.from({ length: days }, (_, i) => `Day ${i + 1}`);
+
+
+        const {
+            storedLocallyOverTime,
+            storedInCloudOverTime,
+            compressedDataOverTime,
+            dedupeEfficiencyOverTime,
+            dedupePreCompressionOverTime,
+            requiredKeysSeries,
+            blockMapOverTime,
+            heldRawDataOverTime,
+            stats } = simulateRetention(
+                days, sourceSizeTiB, changeRate, compressionPct,
+                dailyRetention, weeklyRetention, monthlyRetention,
+                yearlyRetention, cloudDelay, initialCompression
+            );
+
+        // 3️⃣ Build the CSV rows
+        const rows = [];
+        // 1) Report title row
+        rows.push([reportName]);
+        rows.push([]);  // blank line
+
+        // - Input Variables section -
+
+        rows.push(['Input Parameter', 'Value']);
+        rows.push(['Source Data Size (TiB)', sourceSizeTiB]);
+        rows.push(['Change Rate (%)', (changeRate * 100).toFixed(2)]);
+        rows.push(['Daily Retention (days)', dailyRetention]);
+        rows.push(['Weekly Retention (count)', weeklyRetention]);
+        rows.push(['Monthly Retention (count)', monthlyRetention]);
+        rows.push(['Yearly Retention (count)', yearlyRetention]);
+        rows.push(['Simulation Time (months)', simMonths]);
+        rows.push(['Compression Savings (%)', (compressionPct * 100).toFixed(2)]);
+        rows.push(['Days Before Data Moves to Cloud', cloudDelay]);
+        rows.push(['Initial Backup Compression (%)', (initialCompression * 100).toFixed(2)]);
+
+        //add Recommendations to CSV
+        const currentTier = stats.dictionary.tier;
+        const usedPct = stats.dictionary.usedPct;
+        // find its index in your lookup table
+        const idx = keyLookupTable.findIndex(
+            k => k.Size === currentTier.Size && k.Base_RAM === currentTier.Base_RAM
+        );
+
+        // pick the next-higher tier if ≥90%
+        let recTier = currentTier;
+        if (usedPct >= 90 && idx >= 0 && idx < keyLookupTable.length - 1) {
+            recTier = keyLookupTable[idx + 1];
+        }
+
+        // — Summary section —
+        rows.push([]);
+        rows.push(['Results', 'Value']);
+        rows.push(['Total Logical (TiB)', stats.totalLogicalTiB.toFixed(2)]);
+        rows.push(['Total Stored (TiB)', stats.totalStoredTiB.toFixed(2)]);
+        rows.push(['Total Cloud (TiB)', stats.totalCloudStoredTiB.toFixed(2)]);
+
+        // prefer stats.heldRawDataTiB, but fallback to the last day from the series
+        let heldRawTiB = stats.heldRawDataTiB;
+        if (heldRawTiB === undefined || isNaN(heldRawTiB)) {
+            heldRawTiB = heldRawDataOverTime.at(-1) || 0;
+        }
+        rows.push(['Held Raw (TiB)', heldRawTiB.toFixed(2)]);
+        rows.push(['Held Raw (TiB)', heldRawTiB.toFixed(2)]);
+        rows.push(['Snapshots Held', stats.snapshotsHeld]);
+
+        // Use stats if defined, otherwise take last element of the series
+        const prePct = stats.dedupePreCompressionPct !== undefined
+            ? stats.dedupePreCompressionPct
+            : (dedupePreCompressionOverTime.at(-1) || 0);
+
+        const postPct = stats.dedupePostCompressionPct !== undefined
+            ? stats.dedupePostCompressionPct
+            : (dedupeEfficiencyOverTime.at(-1) || 0);
+        rows.push(['Dedup Pre-Compression (%)', prePct.toFixed(2)]);
+        rows.push(['Dedup Post-Compression (%)', postPct.toFixed(2)]);
+
+        rows.push(['Required Keys', stats.dictionary.requiredKeys]);
+        rows.push(['Used Keys (%)', stats.dictionary.usedPct.toFixed(2)]);
+
+        const lastBm = blockMapOverTime.at(-1) || 0;
+        rows.push(['Block Map Size (GiB)', lastBm.toFixed(2)]);
+
+        rows.push([]); // blank line
+
+        // ── Recommended Configuration ──
+
+        rows.push(['Recommended Configuration', '']);
+        rows.push(['Base RAM', recTier.Base_RAM || 'N/A']);
+        rows.push(['Dict Size', recTier.Size || 'N/A']);
+        rows.push(['Additional RAM', recTier.Additional_RAM || 'N/A']);
+        rows.push(['Shift', recTier.Shift || 'N/A']);
+        rows.push(['Page Shift', recTier.Page_Shift || 'N/A']);
+
+        rows.push([]); // another blank line
+
+        // — Daily series header —
+        rows.push([
+            'Day',
+            'Local (TiB)',
+            'Cloud (TiB)',
+            'Total Stored (TiB)',
+            'Dedup Eff (%)',
+            'Pre-Comp Eff (%)',
+            'Required Keys',
+            'Meta-Data (GiB)'
+        ]);
+
+        // — Daily rows —
+        daysLabels.forEach((day, i) => {
+            rows.push([
+                day,
+                storedLocallyOverTime[i].toFixed(2),
+                storedInCloudOverTime[i].toFixed(2),
+                compressedDataOverTime[i].toFixed(2),
+                dedupeEfficiencyOverTime[i].toFixed(2),
+                dedupePreCompressionOverTime[i].toFixed(2),
+                requiredKeysSeries[i],
+                blockMapOverTime[i].toFixed(2)
+            ]);
+        });
+
+        // 4️⃣ Serialize to CSV string
+        const csvContent = rows.map(r =>
+            r.map(cell => `"${cell}"`).join(',')
+        ).join('\r\n');
+
+        // 5️⃣ Trigger download
+        const blob = new Blob([csvContent], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'dedupe_simulation.csv';
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+</script>
+</body>
+
+</html>

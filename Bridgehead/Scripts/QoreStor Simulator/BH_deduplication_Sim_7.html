@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Deduplication Simulator</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js">
+        Chart.defaults.font.family = 'Arial, sans-serif';
+        Chart.defaults.font.size = 12;
+        Chart.defaults.color = '#ffffff';
+    </script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #333333;
+            color: #ffffff;
+        }
+
+        canvas {
+            background-color: #333333;
+        }
+
+        .form-group {
+            margin-bottom: 10px;
+            max-width: 400px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        input {
+            padding: 5px;
+            width: 100%;
+        }
+
+        .chart-container {
+            width: 100%;
+            max-width: 800px;
+            margin-top: 30px;
+        }
+
+        fieldset {
+            border: none;
+        }
+
+        .input-group {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: nowrap;
+            margin-bottom: 12px;
+        }
+
+        .input-group label {
+            flex: 1;
+            white-space: nowrap;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+            /* fill the .input-group width */
+        }
+
+        .input-group input .label-text {
+            flex: 1;
+            text-align: left;
+            margin-right: 10px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .input-group input {
+            width: 80px;
+            text-align: center;
+        }
+
+        .container {
+            display: flex;
+            gap: 40px;
+            align-items: flex-start;
+            margin-bottom: 40px;
+        }
+
+        .column {
+            flex: 1;
+            max-width: 40%;
+        }
+
+        .chart-box {
+            position: relative;
+            width: 100%;
+            height: 400px;
+            position: relative;
+            border: 2px solid #FB4F14;
+            /*border: 2px solid #b295f444;*/
+            border-radius: 8px;
+            /* Curved corners */
+            /* padding: 10px; */
+            /* Optional: adds space around chart inside border */
+            /*background-color: #333333;*/
+            /* Optional: matches chart background */
+            /* display: inline-block;
+            /* So the border fits snugly around canvas */
+            margin-bottom: 20px;
+            /* padding-right: 10px; */
+            box-sizing: border-box;
+            padding: 0;
+            overflow: hidden;
+
+        }
+
+        .chart-box canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            /*new*/
+            bottom: 0;
+            /*new*/
+            width: 100% !important;
+            height: 100% !important;
+            color: #333333;
+        }
+
+        #charts {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        .chart-wrapper {
+            display: flex;
+            flex-direction: column;
+            gap: 30px;
+            padding-right: 20px;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <!-- Inputs -->
+        <div id="inputs" class="column">
+            <h1>Deduplication Calculator</h1>
+            <h2>Input Parameters</h2>
+            <fieldset>
+                <div class="input-group">
+                    <label for="sourceSize">1. Source Data Size (TiB)</label>
+                    <input type="number" id="sourceSize" value="10" step="0.1" />
+                </div>
+                <div class="input-group">
+                    <label for="changeRate">2. Daily Change Rate (%)</label>
+                    <input type="number" id="changeRate" value="2" />
+                </div>
+                <div class="input-group">
+                    <label for="dailyRetention">3. Daily Retention (days)</label>
+                    <input type="number" id="dailyRetention" value="12" />
+                </div>
+                <div class="input-group">
+                    <label for="weeklyRetention">4. Weekly Retention (count)</label>
+                    <input type="number" id="weeklyRetention" value="4" />
+                </div>
+                <div class="input-group">
+                    <label for="monthlyRetention">5. Monthly Retention (count)</label>
+                    <input type="number" id="monthlyRetention" value="11" />
+                </div>
+                <div class="input-group">
+                    <label for="yearlyRetention">6. Yearly Retention (count)</label>
+                    <input type="number" id="yearlyRetention" value="7" />
+                </div>
+                <div class="input-group">
+                    <label for="simulationMonths">7. Simulation Time (months)</label>
+                    <input type="number" id="simulationMonths" value="24" />
+                </div>
+                <div class="input-group">
+                    <label for="compression">8. Compression Savings (%)</label>
+                    <input type="number" id="compression" value="50" step="1" />
+                </div>
+                <div class="input-group">
+                    <label for="cloudDelay">9. Days Before Data Moves to Cloud</label>
+                    <input type="number" id="cloudDelay" value="5" />
+                </div>
+            </fieldset>
+            <button id="generateBtn">Generate Charts</button>
+        </div>
+
+        <!-- Stats Panel -->
+        <div id="stats" class="column">
+            <h1>Simulation Summary</h1>
+            <h2>Results</h2>
+            <p><strong>Total Logical Data Ingested:</strong> <span id="totalRawDataTiB">-</span> TiB</p>
+            <p><strong>Total Stored Data:</strong> <span id="storedDataOverTime">-</span> TiB</p>
+            <p><strong>Deduplication Pre-Compression:</strong> <span id="dedupePreCompression">-</span> %</p>
+            <p><strong>Logical Deduplicated Size:</strong> <span id="logicalDeduped">-</span> TiB</p>
+            <p><strong>Deduplication Post-Compression:</strong> <span id="finalEfficiency">-</span> %</p>
+            <p><strong>Total Cloud Data:</strong> <span id="totalCloud">-</span> TiB</p>
+
+            <h2>Dictionary Requirements</h2>
+            <p><strong>Required Keys (KB/32):</strong> <span id="requiredKeys">-</span></p>
+            <p><strong>Total Max Keys Available:</strong> <span id="totalMaxKeys">-</span></p>
+            <p><strong>Used Keys Percentage:</strong> <span id="usedKeysPercent">-</span> %</p>
+            <p><strong>Base RAM Required:</strong> <span id="keyTierBase">-</span></p>
+            <p><strong>Dictionary Size Required:</strong> <span id="keyTierSize">-</span></p>
+            <p><strong>Additional RAM Required:</strong> <span id="keyTierAddRAM">-</span></p>
+            <p><strong>Bit Shift Setting:</strong> <span id="keyTierShift">-</span></p>
+            <p><strong>Page Shift Setting:</strong> <span id="keyTierPage">-</span></p>
+        </div>
+    </div>
+</body>
+<!-- Charts -->
+<div id="charts">
+    <div class="chart-wrapper">
+        <div class="chart-box">
+            <h3>Stored Data Over Time</h3>
+            <canvas id="storageChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <h3>Deduplication Efficiency Over Time</h3>
+            <canvas id="dedupeChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <h3>Required Keys Over Time</h3>
+            <canvas id="keysChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <h3>Dictionary Tier Over Time</h3>
+            <canvas id="DictChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <h3>Local vs Cloud Storage Over Time</h3>
+            <canvas id="cloudChart"></canvas>
+        </div>
+    </div>
+</div>
+
+
+<script>
+    // ────────────────────────────────────────────────
+    // Lookup table for dictionary sizing
+    const keyLookupTable = [
+        { min: 0, max: 2_863_355_222, Base_RAM: "4096MB", Size: "64GiB", Additional_RAM: "0", Shift: "19", Page_Shift: "12" },
+        { min: 2_863_355_223, max: 5_726_710_444, Base_RAM: "4096MB", Size: "128GiB", Additional_RAM: "0", Shift: "20", Page_Shift: "12" },
+        { min: 5_726_710_445, max: 11_453_420_886, Base_RAM: "8192MB", Size: "256GiB", Additional_RAM: "0", Shift: "21", Page_Shift: "12" },
+        { min: 11_453_420_887, max: 22_906_841_772, Base_RAM: "8192MB", Size: "384GiB", Additional_RAM: "1412", Shift: "22", Page_Shift: "12" },
+        { min: 22_906_841_773, max: 45_813_683_542, Base_RAM: "16384MB", Size: "640GiB", Additional_RAM: "2576", Shift: "23", Page_Shift: "12" },
+        { min: 45_813_683_543, max: 91_627_367_084, Base_RAM: "32768MB", Size: "1.52TiB", Additional_RAM: "4880", Shift: "24", Page_Shift: "12" },
+        { min: 91_627_367_085, max: 183_254_734_166, Base_RAM: "65536MB", Size: "2.176TiB", Additional_RAM: "9488", Shift: "25", Page_Shift: "12" },
+        { min: 183_254_734_167, max: 366_509_468_332, Base_RAM: "65536MB", Size: "4.224TiB", Additional_RAM: "18704", Shift: "26", Page_Shift: "12" }
+    ];
+
+    // ────────────────────────────────────────────────
+    // 1) The simulator with 8-day “full backup” anchoring
+    function simulateRetention(
+        days, sourceSizeTiB, changeRate, compressionPercent,
+        dailyRetention, weeklyRetention, monthlyRetention,
+        yearlyRetention, cloudDelay
+    ) {
+        const rampUpDays = 3;
+        const backupLog = [];
+        const storedDataOverTime = [];
+        const uncompressedDataOverTime = [];
+        const storedLocallyOverTime = [];
+        const storedInCloudOverTime = [];
+        const dedupeEfficiencyOverTime = [];
+        const dedupePreCompressionOverTime = [];
+        const retainedLogicalOverTime = [];
+        const requiredKeysSeries = [];
+        const dictionarySizesOverTime = [];
+        const tierMetaOverTime = [];
+
+        const stats = {
+            totalLogicalTiB: 0,
+            totalUncompressedTiB: 0,
+            totalStorageTiB: 0,
+            totalCloudTiB: 0,
+            dictionary: {}
+        };
+
+        let lastSnapshot = sourceSizeTiB;
+
+        // 1️⃣ build backupLog with fixed‐delta growth
+        for (let day = 0; day < days; day++) {
+            const compressionRamp = Math.min(1, day / rampUpDays);
+            const effectiveCompression = compressionPercent * compressionRamp;
+
+            const dedupedSize = day === 0
+                ? sourceSizeTiB
+                : sourceSizeTiB * changeRate;                   // fixed % of original
+
+            const logicalSize = day === 0
+                ? sourceSizeTiB
+                : lastSnapshot + dedupedSize;                   // linear accumulation
+
+            const compressedSize = dedupedSize * (1 - effectiveCompression);
+            const fullCompressedSize = logicalSize * (1 - effectiveCompression);
+
+            lastSnapshot = logicalSize;
+
+            const tiers = ['daily'];
+            if (day % 7 === 0) tiers.push('weekly');
+            if (day % 30 === 0) tiers.push('monthly');
+            if (day % 365 === 0) tiers.push('yearly');
+
+            backupLog.push({
+                day, logicalSize, dedupedSize,
+                compressedSize, fullCompressedSize, tiers
+            });
+        }
+
+        // 2️⃣ simulate retention + local/cloud split
+        for (let currentDay = 0; currentDay < days; currentDay++) {
+            let totalLogical = 0;
+            let totalUncompressed = 0;
+            let totalCompressed = 0;
+            let localSum = 0;
+            let cloudSum = 0;
+
+            for (const b of backupLog) {
+                const age = currentDay - b.day;
+                if (age < 0) continue;
+
+                const keep =
+                    (age < dailyRetention) ||
+                    (b.tiers.includes('weekly') && age < weeklyRetention * 7) ||
+                    (b.tiers.includes('monthly') && age < monthlyRetention * 30) ||
+                    (b.tiers.includes('yearly') && age < yearlyRetention * 365);
+                if (!keep) continue;
+
+                // only sum the *new* delta for logical
+                totalLogical += b.dedupedSize;
+                totalUncompressed += b.dedupedSize;
+
+                // single compressed contribution
+                const contrib = b.day === 0
+                    ? b.fullCompressedSize
+                    : b.compressedSize;
+
+                totalCompressed += contrib;
+                if (b.day === 0 || age < cloudDelay) localSum += contrib;
+                else cloudSum += contrib;
+            }
+
+            retainedLogicalOverTime.push(totalLogical);
+            uncompressedDataOverTime.push(totalUncompressed);
+            storedDataOverTime.push(totalCompressed);
+            storedLocallyOverTime.push(localSum);
+            storedInCloudOverTime.push(cloudSum);
+
+            // dedupe % post/pre compression
+            const postComp = totalLogical > 0
+                ? (totalLogical - totalCompressed) / totalLogical * 100
+                : 0;
+            const preComp = totalLogical > 0
+                ? (totalLogical - totalUncompressed) / totalLogical * 100
+                : 0;
+
+            dedupeEfficiencyOverTime.push(Math.max(0, postComp));
+            dedupePreCompressionOverTime.push(Math.max(0, preComp));
+        }
+
+        // 3️⃣ final‐stats
+        stats.totalLogicalTiB = retainedLogicalOverTime.at(-1) || 0;
+        stats.totalUncompressedTiB = uncompressedDataOverTime.at(-1) || 0;
+        stats.totalStorageTiB = storedDataOverTime.at(-1) || 0;
+        stats.totalCloudTiB = storedInCloudOverTime.at(-1) || 0;
+
+        // dictionary timeline (daily keys & tiers)
+        retainedLogicalOverTime.forEach(logicalTiB => {
+            const numKeys = Math.floor((logicalTiB * 1024 ** 3) / 32);
+            requiredKeysSeries.push(numKeys);
+            const match = keyLookupTable.find(k => numKeys >= k.min && numKeys <= k.max) || {};
+            tierMetaOverTime.push(match);
+            dictionarySizesOverTime.push(match.Size || 'N/A');
+        });
+
+        // final dictionary stat
+        const logicalDedupedTiB = stats.totalLogicalTiB - stats.totalStorageTiB;
+        const finalKeys = Math.floor((logicalDedupedTiB * 1024 ** 3) / 32);
+        const finalTier = keyLookupTable.find(e => finalKeys >= e.min && finalKeys <= e.max) || {};
+        const usedPct = finalTier.max ? finalKeys / finalTier.max * 100 : 0;
+        stats.dictionary = {
+            requiredKeys: finalKeys,
+            tier: finalTier,
+            usedPct
+        };
+
+        return {
+            storedDataOverTime,
+            uncompressedDataOverTime,
+            storedLocallyOverTime,
+            storedInCloudOverTime,
+            dedupeEfficiencyOverTime,
+            dedupePreCompressionOverTime,
+            retainedLogicalOverTime,
+            requiredKeysSeries,
+            dictionarySizesOverTime,
+            tierMetaOverTime,
+            stats
+        };
+    }
+
+
+    // ────────────────────────────────────────────────
+    // Chart option helper
+    function getChartOptions(title, xLabel, yLabel, yMax = null) {
+        return {
+            maintainAspectRatio: false,
+            responsive: true,
+            layout: {
+                padding: {
+                    top: 10,
+                    right: 10,
+                    bottom: 10,
+                    left: 10
+                }
+            },
+            plugins: {
+                legend: { labels: { color: '#ffffff' } },
+                title: {
+                    display: true,
+                    text: title,
+                    font: { size: 14, family: 'Arial, sans-serif' }, //explicit
+                    color: '#ffffff'
+                }
+            },
+            scales: {
+                x: {
+                    grid: { color: '#444444' },
+                    ticks: {
+                        font: { size: 10, family: 'Arial, sans-serif' },
+                        color: '#ffffff'
+                    },
+                    title: {
+                        display: true,
+                        text: xLabel,
+                        font: { size: 12, family: 'Arial, sans-serif' },
+                        color: '#ffffff'
+                    }
+                },
+                y: {
+                    grid: { color: '#444444' },
+                    beginAtZero: true,
+                    max: yMax,
+                    ticks: {
+                        font: { size: 10, family: 'Arial, sans-serif' },
+                        color: '#ffffff'
+                    },
+                    title: {
+                        display: true,
+                        text: yLabel,
+                        font: { size: 12, family: 'Arial, sans-serif' },
+                        color: '#ffffff'
+                    }
+                }
+            }
+        };
+    }
+
+    // ────────────────────────────────────────────────
+    // The main entrypoint to chart the simulation.
+    function generateCharts() {
+        // gather inputs
+        const sourceSizeTiB = parseFloat(document.getElementById('sourceSize').value);
+        const changeRate = parseFloat(document.getElementById('changeRate').value) / 100;
+        const dailyRetention = parseInt(document.getElementById('dailyRetention').value, 10);
+        const weeklyRetention = parseInt(document.getElementById('weeklyRetention').value, 10);
+        const monthlyRetention = parseInt(document.getElementById('monthlyRetention').value, 10);
+        const yearlyRetention = parseInt(document.getElementById('yearlyRetention').value, 10);
+        const simMonths = parseInt(document.getElementById('simulationMonths').value, 10);
+        const compressionPct = parseFloat(document.getElementById('compression').value) / 100;
+        const cloudDelay = parseInt(document.getElementById('cloudDelay').value, 10);
+
+        const days = simMonths * 30;
+        const daysLabels = Array.from({ length: days }, (_, i) => `Day ${i + 1}`);
+
+        const {
+            storedDataOverTime, storedLocallyOverTime, storedInCloudOverTime,
+            dedupeEfficiencyOverTime, dedupePreCompressionOverTime,
+            retainedLogicalOverTime, requiredKeysSeries,
+            dictionarySizesOverTime, tierMetaOverTime, stats
+        } = simulateRetention(
+            days, sourceSizeTiB, changeRate, compressionPct,
+            dailyRetention, weeklyRetention, monthlyRetention,
+            yearlyRetention, cloudDelay
+        );
+
+        // monthly down-sampling
+        const monthLabels = Array.from({ length: simMonths }, (_, i) => `Month ${i + 1}`);
+        const monthlyKeys = requiredKeysSeries.filter((_, i) => i % 30 === 0);
+        const monthlyDict = dictionarySizesOverTime.filter((_, i) => i % 30 === 0);
+        const monthlyMeta = tierMetaOverTime.filter((_, i) => i % 30 === 0);
+
+        // ─── Update Stats Panel ───────────────────────
+        const totLogical = stats.totalLogicalTiB;
+        const totUncomp = stats.totalUncompressedTiB;
+        const totStored = stats.totalStorageTiB;
+        const totCloud = stats.totalCloudTiB;
+        // % pre-compression
+        const preSave = totLogical > 0 ? (totLogical - totUncomp) / totLogical * 100 : 0;
+        // % post-compression
+        const postSave = totLogical > 0 ? (totLogical - totStored) / totLogical * 100 : 0;
+
+        document.getElementById('totalRawDataTiB').textContent = totLogical.toFixed(2);
+        document.getElementById('storedDataOverTime').textContent = totStored.toFixed(2);
+        document.getElementById('dedupePreCompression').textContent = preSave.toFixed(2);
+        document.getElementById('logicalDeduped').textContent = (totLogical - totStored).toFixed(2);
+        document.getElementById('finalEfficiency').textContent = postSave.toFixed(2);
+        document.getElementById('totalCloud').textContent = totCloud.toFixed(2);
+
+        // dictionary final
+        const { requiredKeys, tier, usedPct } = stats.dictionary;
+        document.getElementById('requiredKeys').textContent = requiredKeys.toLocaleString();
+        document.getElementById('totalMaxKeys').textContent = (tier.max || 0).toLocaleString();
+        document.getElementById('usedKeysPercent').textContent = usedPct.toFixed(2);
+        document.getElementById('keyTierBase').textContent = tier.Base_RAM || 'N/A';
+        document.getElementById('keyTierSize').textContent = tier.Size || 'N/A';
+        document.getElementById('keyTierAddRAM').textContent = tier.Additional_RAM || 'N/A';
+        document.getElementById('keyTierShift').textContent = tier.Shift || 'N/A';
+        document.getElementById('keyTierPage').textContent = tier.Page_Shift || 'N/A';
+
+
+        // ─── Render Charts ────────────────────────────
+        // destroy old
+        ['chart1', 'chart2', 'chart3', 'chart4', 'chart5'].forEach(id => {
+            if (window[id] instanceof Chart) window[id].destroy();
+        });
+
+        // Chart 1: Stored Data
+        window.chart1 = new Chart(
+            document.getElementById('storageChart').getContext('2d'),
+            {
+                type: 'line',
+                data: {
+                    labels: daysLabels, datasets: [{
+                        label: 'Stored Data (TiB)', data: storedDataOverTime,
+                        borderColor: 'orange', fill: true, tension: 0.3
+                    }]
+                }
+                , options: getChartOptions('Stored Data Over Time', 'Day', 'TiB')
+            }
+        );
+
+        // Chart 2: Dedup Efficiency
+        window.chart2 = new Chart(
+            document.getElementById('dedupeChart').getContext('2d'),
+            {
+                type: 'line',
+                data: {
+                    labels: daysLabels, datasets: [{
+                        label: 'Dedup Efficiency (%)', data: dedupeEfficiencyOverTime,
+                        borderColor: 'lightgreen', fill: false, tension: 0.3
+                    }]
+                }
+                , options: getChartOptions('Deduplication Efficiency Over Time', 'Day', '% Efficiency', 100)
+            }
+        );
+
+        // Chart 3: Required Keys (monthly)
+        window.chart3 = new Chart(
+            document.getElementById('keysChart').getContext('2d'),
+            {
+                type: 'line',
+                data: {
+                    labels: monthLabels, datasets: [{
+                        label: 'Required Keys (KB/32)', data: monthlyKeys,
+                        borderColor: '#8b5cf6', fill: true, tension: 0.3,
+                        backgroundColor: '#b295f444'
+                    }]
+                }
+                , options: getChartOptions('Required Keys Over Time', 'Month', 'Keys')
+            }
+        );
+
+        // Chart 4: Dictionary Tier (monthly)
+        // 1️⃣ Build your category list once, up near the top of generateCharts()
+        const sizeCategories = keyLookupTable.map(e => e.Size);
+        const uniqueSizeCategories = [...new Set(sizeCategories)].sort((a, b) => {
+            const toGiB = s => s.includes("TiB") ? parseFloat(s) * 1024 : parseFloat(s);
+            return toGiB(a) - toGiB(b);
+        });
+
+        // 2️⃣ Define your per-chart “baseOpts” (you already have something like this for other charts)
+        const baseOpts4 = {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { labels: { color: "#ffffff" } },
+                title: { display: true, text: "Dictionary Transitions Over Time", color: "#ffffff" },
+                tooltip: {
+                    callbacks: {
+                        label: ctx => {
+                            // `tierMetaOverTime` must be the array you returned from simulateRetention
+                            const meta = tierMetaOverTime[ctx.dataIndex] || {};
+                            return [
+                                `Size: ${meta.Size || "N/A"}`,
+                                `Base RAM: ${meta.Base_RAM || "N/A"}`,
+                                `Additional RAM: ${meta.Additional_RAM || "N/A"}`,
+                                `Shift: ${meta.Shift || "N/A"}`,
+                                `Page Shift: ${meta.Page_Shift || "N/A"}`
+                            ];
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    type: "category",
+                    labels: monthLabels,           // your array of ["Month 1","Month 2",…]
+                    ticks: { color: "#ffffff" },
+                    grid: { color: "#444444" },
+                    title: { display: true, text: "Months", color: "#ffffff" }
+                },
+                y: {
+                    type: "category",
+                    reverse: true,
+                    labels: uniqueSizeCategories,  // from step 1
+                    ticks: { color: "#ffffff" },
+                    grid: { color: "#444444" },
+                    title: { display: true, text: "Tier Level", color: "#ffffff" }
+                }
+            }
+        };
+
+        // 3️⃣ Finally, create the chart itself:
+        const ctx4 = document
+            .getElementById("DictChart")
+            .getContext("2d");
+
+        window.chart4 = new Chart(ctx4, {
+            type: "line",
+            data: {
+                labels: monthLabels,
+                datasets: [{
+                    label: "Dictionary Tier",
+                    data: dictionarySizesOverTime.map((size, i) => ({
+                        x: monthLabels[i],
+                        y: size
+                    })),
+                    borderColor: "#f59e0b",
+                    backgroundColor: "rgba(245, 158, 11, 0.2)",
+                    fill: true,
+                    stepped: true
+                }]
+            },
+            options: baseOpts4
+        });
+
+
+
+
+        // Chart 5: Local vs Cloud
+        window.chart5 = new Chart(
+            document.getElementById('cloudChart').getContext('2d'),
+            {
+                type: 'line',
+                data: {
+                    labels: daysLabels, datasets: [
+                        {
+                            label: 'Local (TiB)', data: storedLocallyOverTime,
+                            borderColor: '#4ade80', fill: true, stack: 's'
+                        },
+                        {
+                            label: 'Cloud (TiB)', data: storedInCloudOverTime,
+                            borderColor: '#60a5fa', fill: true, stack: 's'
+                        }
+                    ]
+                }
+                , options: getChartOptions('Local vs Cloud Storage', 'Day', 'TiB')
+            }
+        );
+    }
+
+    document.getElementById('generateBtn')
+        .addEventListener('click', generateCharts);
+</script>
+</body>
+
+</html>
