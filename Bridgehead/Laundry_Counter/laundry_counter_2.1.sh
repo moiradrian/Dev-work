@@ -1,49 +1,41 @@
 #!/usr/bin/env bash
-#
-# QoreStor Laundry Monitor (event-driven, inotifywait-based)
+
+# QoreStor Laundry Monitor (inotify-driven, simplified)
 # - Color highlighting for increases/decreases
 # - Logs events to a file
-# - Threshold alerts (per-dir + global)
+# - Threshold alerts
 # - Reduced-CPU mode (rate-limited screen refresh)
-#
 
-### CONFIG ###########################################################
-
-# Base path: /QSdata/ocaroot/<int>/.ocarina_hidden/laundry/<int>/<files>
 BASE="/QSdata/ocaroot"
-
-# Log file for events
 LOG_FILE="/var/log/qorestor_laundry_monitor.log"
 
-# Thresholds (set to 0 to disable)
-DIR_THRESHOLD=1000        # alert if a single dir has >= this many files
-TOTAL_THRESHOLD=10000     # alert if total files >= this many
+DIR_THRESHOLD=1000       # per-dir threshold (0 = off)
+TOTAL_THRESHOLD=10000    # global threshold (0 = off)
 
-# Reduced-CPU mode: only re-render at most once every N seconds
 REDUCED_CPU=true
-REFRESH_INTERVAL=2        # seconds between screen updates in reduced mode
+REFRESH_INTERVAL=2       # seconds between screen refreshes in reduced mode
 
-#####################################################################
+# Make sure we're in bash with associative arrays support
+if [ -z "${BASH_VERSION:-}" ]; then
+    echo "This script must be run with bash, e.g.: bash $0" >&2
+    exit 1
+fi
 
-shopt -s extglob
 shopt -s nullglob
 
-# Ensure log directory exists
-mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
-
-# Associative arrays: current counts, previous counts (for color diff)
 declare -A counts
 declare -A prev_counts
 
-# Colors (tput)
-color_reset=$(tput sgr0)
-color_green=$(tput setaf 2)
-color_red=$(tput setaf 1)
-color_yellow=$(tput setaf 3)
-color_magenta=$(tput setaf 5)
-color_bold=$(tput bold)
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
 
-# One-time initialization of counts using find
+# Colors
+color_reset=$(tput sgr0 2>/dev/null || echo "")
+color_green=$(tput setaf 2 2>/dev/null || echo "")
+color_red=$(tput setaf 1 2>/dev/null || echo "")
+color_yellow=$(tput setaf 3 2>/dev/null || echo "")
+color_magenta=$(tput setaf 5 2>/dev/null || echo "")
+color_bold=$(tput bold 2>/dev/null || echo "")
+
 init_counts() {
     while IFS= read -r line; do
         local count dir
@@ -61,11 +53,8 @@ init_counts() {
     )
 }
 
-# Render the on-screen dashboard
 render() {
-    tput cup 0 0
-    tput ed
-
+    clear
     echo "QoreStor Laundry File Monitor (inotify-driven)"
     echo "Base: $BASE"
     echo "Updated: $(date)"
@@ -73,7 +62,6 @@ render() {
 
     local grand_total=0
 
-    # Sort directories for stable output
     mapfile -t dirs < <(printf '%s\n' "${!counts[@]}" | sort)
 
     for dir in "${dirs[@]}"; do
@@ -81,14 +69,11 @@ render() {
         local prev=${prev_counts["$dir"]}
         [[ -z "$prev" ]] && prev=$cur
 
-        local line_color=""
-        local reset="$color_reset"
+        local line_color="$color_reset"
 
-        # Per-dir threshold highlight takes precedence
         if (( DIR_THRESHOLD > 0 && cur >= DIR_THRESHOLD )); then
             line_color="${color_bold}${color_red}"
         else
-            # Directional coloring based on change since last render
             if (( cur > prev )); then
                 line_color=$color_green
             elif (( cur < prev )); then
@@ -98,15 +83,13 @@ render() {
             fi
         fi
 
-        printf "%s%-60s %10d%s\n" "$line_color" "$dir" "$cur" "$reset"
+        printf "%s%-60s %10d%s\n" "$line_color" "$dir" "$cur" "$color_reset"
 
         grand_total=$((grand_total + cur))
         prev_counts["$dir"]=$cur
     done
 
     echo "--------------------------------------"
-
-    # Global summary + threshold alert
     if (( TOTAL_THRESHOLD > 0 && grand_total >= TOTAL_THRESHOLD )); then
         echo -e "${color_bold}${color_magenta}Grand Total Files: $grand_total (THRESHOLD EXCEEDED)${color_reset}"
     else
@@ -114,11 +97,10 @@ render() {
     fi
 }
 
-# Update count for a directory (+1 or -1) and log the event
 update_count() {
     local dir="$1"
-    local op="$2"        # +1 or -1
-    local reason="$3"    # e.g. CREATE, DELETE, MOVED_TO, MOVED_FROM
+    local op="$2"      # +1 or -1
+    local reason="$3"  # CREATE/DELETE/etc.
 
     local cur=${counts["$dir"]}
     [[ -z "$cur" ]] && cur=0
@@ -132,15 +114,11 @@ update_count() {
 
     counts["$dir"]=$cur
 
-    # Log event
     printf '%s dir="%s" op="%s" reason="%s" count=%d\n' \
         "$(date '+%Y-%m-%d %H:%M:%S')" "$dir" "$op" "$reason" "$cur" >> "$LOG_FILE"
 }
 
-# Hide cursor; restore on exit
-tput civis
 cleanup() {
-    tput cnorm
     echo
     echo "Exiting qorestor_laundry_monitor."
 }
@@ -151,45 +129,38 @@ render
 
 last_render=$(date +%s)
 
-# Start inotifywait: recursive, watching for file creates/deletes/moves
+# Main inotify loop
 inotifywait -m -r \
     -e create -e delete -e moved_to -e moved_from \
     --format '%w %f %e' \
     "$BASE" 2>/dev/null | \
 while read -r watched_dir filename events; do
-    # Full path
     fullpath="${watched_dir%/}/$filename"
 
-    # We only care about files in:
+    # Regex match for:
     # /QSdata/ocaroot/<int>/.ocarina_hidden/laundry/<int>/<file>
-    case "$fullpath" in
-        "$BASE"/+([0-9])/.ocarina_hidden/laundry/+([0-9])/*)
-            parent_dir="${fullpath%/*}"
+    if [[ "$fullpath" =~ ^$BASE/[0-9]+/\.ocarina_hidden/laundry/[0-9]+/[^/]+$ ]]; then
+        parent_dir="${fullpath%/*}"
 
-            # Decide +1 / -1 based on event type
-            op=""
-            if [[ "$events" == *CREATE* || "$events" == *MOVED_TO* ]]; then
-                op="+1"
-            elif [[ "$events" == *DELETE* || "$events" == *MOVED_FROM* ]]; then
-                op="-1"
-            else
-                continue
-            fi
+        op=""
+        if [[ "$events" == *CREATE* || "$events" == *MOVED_TO* ]]; then
+            op="+1"
+        elif [[ "$events" == *DELETE* || "$events" == *MOVED_FROM* ]]; then
+            op="-1"
+        else
+            continue
+        fi
 
-            update_count "$parent_dir" "$op" "$events"
+        update_count "$parent_dir" "$op" "$events"
 
-            if [[ "$REDUCED_CPU" == true ]]; then
-                now=$(date +%s)
-                if (( now - last_render >= REFRESH_INTERVAL )); then
-                    render
-                    last_render=$now
-                fi
-            else
+        if [[ "$REDUCED_CPU" == true ]]; then
+            now=$(date +%s)
+            if (( now - last_render >= REFRESH_INTERVAL )); then
                 render
+                last_render=$now
             fi
-            ;;
-        *)
-            # Ignore everything outside the laundry path pattern
-            ;;
-    esac
+        else
+            render
+        fi
+    fi
 done
