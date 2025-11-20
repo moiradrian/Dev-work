@@ -27,8 +27,10 @@ detect_base() {
 	BASE="/QSdata/ocaroot"
 
 	if [[ -f "$CFG_FILE" ]]; then
-		# Extract TGTDIR=<path>, first occurrence
-		value=$(grep -E '^TGTDIR=' "$CFG_FILE" 2>/dev/null | head -n1 | cut -d= -f2-)
+		# Accept either:
+		#   TGTDIR=/path
+		#   export TGTDIR=/path
+		value=$(grep -E '(^|\s)TGTDIR=' "$CFG_FILE" | head -n1 | sed 's/.*TGTDIR=//')
 	fi
 
 	if [[ -n "$value" && -d "$value" ]]; then
@@ -156,11 +158,19 @@ scan_laundry_dirs() {
 		2>/dev/null | sort
 }
 
-# Initialize counts map from existing files (monitor mode)
+# Initialize counts map from existing directories and files (monitor mode)
 init_counts_from_files() {
 	counts=()
 	prev_counts=()
 
+	# 1. Start with all laundry dirs, default count 0
+	while IFS= read -r dir; do
+		[[ -z "$dir" ]] && continue
+		counts["$dir"]=0
+		prev_counts["$dir"]=0
+	done < <(scan_laundry_dirs)
+
+	# 2. Overlay actual file counts where files exist
 	while IFS= read -r line; do
 		[[ -z "$line" ]] && continue
 		local count dir
@@ -208,14 +218,19 @@ render_monitor() {
 		local line_color="$color_reset"
 
 		if ((DIR_THRESHOLD > 0 && cur >= DIR_THRESHOLD)); then
+			# Threshold exceeded: bold red
 			line_color="${color_bold}${color_red}"
 		else
-			if ((cur > prev)); then
-				line_color=$color_green
-			elif ((cur < prev)); then
-				line_color=$color_red
+			# NEW logic:
+			#  - static  -> white/default
+			#  - decrease -> green
+			#  - increase -> red
+			if ((cur < prev)); then
+				line_color=$color_green # count went down
+			elif ((cur > prev)); then
+				line_color=$color_red # count went up
 			else
-				line_color=$color_reset
+				line_color=$color_reset # unchanged
 			fi
 		fi
 
@@ -231,30 +246,6 @@ render_monitor() {
 	else
 		echo "Grand Total Files: $grand_total"
 	fi
-}
-
-# Update count for a directory (+1 or -1) and log
-update_count() {
-	local dir="$1"
-	local op="$2"     # +1 or -1
-	local reason="$3" # CREATE/DELETE/etc.
-
-	[[ -z "$dir" ]] && return
-
-	local cur=${counts["$dir"]}
-	[[ -z "$cur" ]] && cur=0
-
-	if [[ "$op" == "+1" ]]; then
-		cur=$((cur + 1))
-	else
-		cur=$((cur - 1))
-		((cur < 0)) && cur=0
-	fi
-
-	counts["$dir"]=$cur
-
-	printf '%s dir="%s" op="%s" reason="%s" count=%d\n' \
-		"$(date '+%Y-%m-%d %H:%M:%S')" "$dir" "$op" "$reason" "$cur" >>"$LOG_FILE"
 }
 
 ########################################
@@ -313,45 +304,68 @@ while true; do
 
 	# inotify loop (auto-restarted if inotifywait exits)
 	while read -r watched_dir filename events; do
-		fullpath="${watched_dir%/}/$filename"
-
-		# Match only:
-		#   <BASE>/<int>/.ocarina_hidden/laundry/<int>/<file>
-		if [[ "$fullpath" =~ ^$BASE/[0-9]+/\.ocarina_hidden/laundry/[0-9]+/[^/]+$ ]]; then
-			parent_dir="${fullpath%/*}"
-
-			op=""
-			if [[ "$events" == *CREATE* || "$events" == *MOVED_TO* ]]; then
-				op="+1"
-			elif [[ "$events" == *DELETE* || "$events" == *MOVED_FROM* ]]; then
-				op="-1"
-			else
-				continue
-			fi
-
-			update_count "$parent_dir" "$op" "$events"
-
-			now=$(date +%s)
-
-			# Periodic full refresh to catch new/removed dirs (only if configured)
-			if ((FULL_REFRESH_INTERVAL > 0)) && ((now - last_full_refresh >= FULL_REFRESH_INTERVAL)); then
-				init_counts_from_files
-				render_monitor
-				last_full_refresh=$now
-				last_render=$now
-				continue
-			fi
-
-			if $REDUCED_CPU; then
-				if ((now - last_render >= REFRESH_INTERVAL)); then
-					render_monitor
-					last_render=$now
-				fi
-			else
-				render_monitor
-				last_render=$now
-			fi
+		# Example from inotifywait:
+		#   watched_dir = /QSdata/ocaroot/0/.ocarina_hidden/laundry/1/
+		#   filename    = tst2
+		#   events      = CREATE
+		#
+		# We care about file-level events only (skip pure directory events).
+		if [[ -z "$filename" ]]; then
+			continue
 		fi
+
+		# Normalize parent_dir to not end with slash
+		parent_dir="${watched_dir%/}"
+
+		# Only process if parent_dir looks like:
+		#   <BASE>/<int>/.ocarina_hidden/laundry/<int>
+		case "$parent_dir" in
+		"$BASE"/[0-9]*"/.ocarina_hidden/laundry/"[0-9]*)
+			# ok
+			;;
+		*)
+			# Not one of our target directories
+			continue
+			;;
+		esac
+
+		# Decide whether this is +1 or -1 based on the event list
+		op=""
+		if [[ "$events" == *CREATE* || "$events" == *MOVED_TO* ]]; then
+			op="+1"
+		elif [[ "$events" == *DELETE* || "$events" == *MOVED_FROM* ]]; then
+			op="-1"
+		else
+			# We asked inotify for create/delete/move events only,
+			# but if something else sneaks in, ignore it.
+			continue
+		fi
+
+		# Update count and log
+		update_count "$parent_dir" "$op" "$events"
+
+		now=$(date +%s)
+
+		# Periodic full refresh to catch new/removed dirs (only if configured)
+		if ((FULL_REFRESH_INTERVAL > 0)) && ((now - last_full_refresh >= FULL_REFRESH_INTERVAL)); then
+			init_counts_from_files
+			render_monitor
+			last_full_refresh=$now
+			last_render=$now
+			continue
+		fi
+
+		# Redraw logic
+		if $REDUCED_CPU; then
+			if ((now - last_render >= REFRESH_INTERVAL)); then
+				render_monitor
+				last_render=$now
+			fi
+		else
+			render_monitor
+			last_render=$now
+		fi
+
 	done < <(
 		inotifywait -m -r \
 			-e create -e delete -e moved_to -e moved_from \
