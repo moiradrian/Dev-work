@@ -1,0 +1,261 @@
+#!/usr/bin/env bash
+# Laundry bucket monitor with periodic sampling + sparklines
+# - Bucket-level totals only: <BASE>/<int>/.ocarina_hidden/laundry/<bucket>
+# - Periodic rescan (default 2s) to avoid missing bursts
+# - Per-sample delta and rolling sparkline (up/neutral/down coloring)
+
+set -Eeuo pipefail
+
+CFG_FILE="/etc/oca/oca.cfg"
+BASE_DEFAULT="/QSdata/ocaroot"
+
+SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-2}"   # seconds between samples
+SPARK_POINTS="${SPARK_POINTS:-30}"        # samples to keep per bucket
+
+# Colors (best effort)
+color_reset=$(tput sgr0 2>/dev/null || echo "")
+color_green=$(tput setaf 2 2>/dev/null || echo "")
+color_red=$(tput setaf 1 2>/dev/null || echo "")
+color_dim=$(tput dim 2>/dev/null || echo "")
+color_bold=$(tput bold 2>/dev/null || echo "")
+color_yellow=$(tput setaf 3 2>/dev/null || echo "")
+color_magenta=$(tput setaf 5 2>/dev/null || echo "")
+color_cyan=$(tput setaf 6 2>/dev/null || echo "")
+
+detect_base() {
+    BASE="$BASE_DEFAULT"
+    if [[ -f "$CFG_FILE" ]]; then
+        local val
+        val=$(grep -E '(^|\s)TGTDIR=' "$CFG_FILE" 2>/dev/null | head -n1 | sed 's/.*TGTDIR=//')
+        if [[ -n "$val" && -d "$val" ]]; then
+            BASE="$val"
+        fi
+    fi
+}
+
+detect_base
+
+declare -A counts
+declare -A prev_counts
+declare -A sparks  # space-separated values per bucket
+declare -A spark_tokens  # corresponding color tokens per bucket (G/R/D)
+total_added=0
+total_removed=0
+initialized=0
+SPINNER_PID=0
+
+start_spinner() {
+    local msg="${1:-Starting...}"
+    {
+        local chars='|/-\' i=0
+        local colors=("$color_green" "$color_yellow" "$color_magenta" "$color_cyan" "$color_red")
+        local ci=0 n=${#colors[@]}
+        while true; do
+            local c=${chars:i%${#chars}:1}
+            local col=${colors[ci]}
+            printf "\r%s %s%s%s" "$msg" "$col" "$c" "$color_reset"
+            i=$(( (i + 1) % ${#chars} ))
+            ci=$(( (ci + 1) % n ))
+            sleep 0.1
+        done
+    } &
+    SPINNER_PID=$!
+}
+
+stop_spinner() {
+    if ((SPINNER_PID > 0)); then
+        kill "$SPINNER_PID" 2>/dev/null || true
+        wait "$SPINNER_PID" 2>/dev/null || true
+        SPINNER_PID=0
+        printf "\r\033[K"
+    fi
+}
+
+now_ms() {
+    printf '%s\n' "$(($(date +%s%N) / 1000000))"
+}
+
+spark_line() {
+    local values_str="$1" tokens_str="$2"
+    [[ -z "$values_str" ]] && { echo ""; return; }
+    local blocks=(▁ ▂ ▃ ▄ ▅ ▆ ▇ █)
+    local vals=($values_str)
+    local toks=($tokens_str)
+    local min="${vals[0]}" max="${vals[0]}"
+    local v t out="" range idx i
+    for v in "${vals[@]}"; do
+        ((v < min)) && min="$v"
+        ((v > max)) && max="$v"
+    done
+    range=$((max - min))
+    for i in "${!vals[@]}"; do
+        v="${vals[$i]}"
+        t="${toks[$i]:-D}"
+        if ((range == 0)); then
+            idx=3
+        else
+            idx=$((((v - min) * (${#blocks[@]} - 1)) / range))
+            ((idx < 0)) && idx=0
+            ((idx > ${#blocks[@]} - 1)) && idx=${#blocks[@]}-1
+        fi
+        case "$t" in
+            G) out+="${color_green}${blocks[$idx]}${color_reset}" ;;
+            R) out+="${color_red}${blocks[$idx]}${color_reset}" ;;
+            *) out+="${color_dim}${blocks[$idx]}${color_reset}" ;;
+        esac
+    done
+    echo "$out"
+}
+
+scan_buckets() {
+    find "$BASE" \
+        -regextype posix-extended \
+        -type d \
+        -regex "$BASE/[0-9]+/\\.ocarina_hidden/laundry/[0-9]+" \
+        2>/dev/null | sort
+}
+
+bucket_dir_for() {
+    local path="$1"
+    local re="^(${BASE}/[0-9]+/\\.ocarina_hidden/laundry/[0-9]+)"
+    [[ "$path" =~ $re ]] && echo "${BASH_REMATCH[1]}"
+}
+
+sample_counts() {
+    # Snapshot current counts to prev_counts
+    prev_counts=()
+    for b in "${!counts[@]}"; do
+        prev_counts["$b"]=${counts["$b"]}
+    done
+
+    counts=()
+    while IFS= read -r dir; do
+        [[ -z "$dir" ]] && continue
+        counts["$dir"]=0
+    done < <(scan_buckets)
+
+    while IFS= read -r path; do
+        [[ -z "$path" ]] && continue
+        local bucket
+        bucket=$(bucket_dir_for "$path")
+        [[ -z "$bucket" ]] && continue
+        if [[ -v counts["$bucket"] ]]; then
+            counts["$bucket"]=$((counts["$bucket"] + 1))
+        fi
+    done < <(
+        find "$BASE" \
+            -regextype posix-extended \
+            -type f \
+            -regex "$BASE/[0-9]+/\\.ocarina_hidden/laundry/[0-9]+/.+" \
+            2>/dev/null
+    )
+}
+
+update_spark() {
+    local bucket="$1" val="$2" tok="$3"
+    local vals toks
+    vals="${sparks[$bucket]:-}"
+    toks="${spark_tokens[$bucket]:-}"
+
+    if [[ -z "$vals" ]]; then
+        vals="$val"
+        toks="$tok"
+    else
+        vals="$vals $val"
+        toks="$toks $tok"
+        # trim to SPARK_POINTS
+        local vals_arr=($vals) toks_arr=($toks)
+        local n=${#vals_arr[@]}
+        if ((n > SPARK_POINTS)); then
+            vals_arr=("${vals_arr[@]: -$SPARK_POINTS}")
+            toks_arr=("${toks_arr[@]: -$SPARK_POINTS}")
+        fi
+        vals="${vals_arr[*]}"
+        toks="${toks_arr[*]}"
+    fi
+    sparks["$bucket"]="$vals"
+    spark_tokens["$bucket"]="$toks"
+}
+
+render() {
+    clear
+    echo "Laundry Bucket Monitor (sparkline sampling)"
+    echo "Base: $BASE"
+    echo "Sample interval: ${SAMPLE_INTERVAL}s"
+    echo "Updated: $(date)"
+    echo "--------------------------------------"
+
+    if ((${#counts[@]} == 0)); then
+        echo "(no buckets found under $BASE)"
+        return
+    fi
+
+    mapfile -t buckets < <(printf '%s\n' "${!counts[@]}" | sort)
+    local grand=0
+    for b in "${buckets[@]}"; do
+        local cur=${counts["$b"]}
+        local prev=${prev_counts["$b"]:-$cur}
+        local delta=$((cur - prev))
+        grand=$((grand + cur))
+
+        if ((initialized == 1)); then
+            if ((delta > 0)); then
+                total_added=$((total_added + delta))
+            elif ((delta < 0)); then
+                total_removed=$((total_removed + (-delta)))
+            fi
+        fi
+
+        # Choose spark value: if no change, reuse last height but dim it
+        local spark_val="$delta" tok="D"
+        if ((delta > 0)); then
+            tok="G"
+        elif ((delta < 0)); then
+            tok="R"
+        else
+            # reuse last height if present
+            if [[ -n "${sparks[$b]:-}" ]]; then
+                local last_vals=(${sparks[$b]})
+                spark_val="${last_vals[$((${#last_vals[@]}-1))]}"
+            else
+                spark_val=0
+            fi
+        fi
+
+        update_spark "$b" "$spark_val" "$tok"
+        local spark_str
+        spark_str=$(spark_line "${sparks[$b]}" "${spark_tokens[$b]}")
+
+        local delta_str=""
+        if ((delta > 0)); then
+            delta_str="${color_green}+${delta}${color_reset}"
+        elif ((delta < 0)); then
+            delta_str="${color_red}${delta}${color_reset}"
+        else
+            delta_str="${color_dim}+0${color_reset}"
+        fi
+
+        printf "%-30s %-55s %7d %7s\n" "$spark_str" "$b" "$cur" "$delta_str"
+    done
+    echo "--------------------------------------"
+    printf "Pending files: %d    Added: %s%d%s    Removed: %s%d%s\n" \
+        "$grand" \
+        "$color_green" "$total_added" "$color_reset" \
+        "$color_red" "$total_removed" "$color_reset"
+    initialized=1
+}
+
+main() {
+    trap 'exit 0' INT TERM
+    start_spinner "Starting..."
+    sample_counts
+    stop_spinner
+    render
+    while true; do
+        sleep "$SAMPLE_INTERVAL"
+        sample_counts
+        render
+    done
+}
+
+main
