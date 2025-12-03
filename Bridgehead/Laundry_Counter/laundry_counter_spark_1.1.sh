@@ -114,17 +114,18 @@ spark_line() {
 }
 
 scan_buckets() {
-    find "$BASE" \
-        -regextype posix-extended \
-        -type d \
-        -regex "$BASE/[0-9]+/\\.ocarina_hidden/laundry/[0-9]+" \
-        2>/dev/null | sort
+    # Use -path instead of regex so BASE content is treated literally and works with BSD/mac find
+    find "$BASE" -type d -path "$BASE"/[0-9]*/.ocarina_hidden/laundry/[0-9]* 2>/dev/null | sort
 }
 
 bucket_dir_for() {
     local path="$1"
-    local re="^(${BASE}/[0-9]+/\\.ocarina_hidden/laundry/[0-9]+)"
-    [[ "$path" =~ $re ]] && echo "${BASH_REMATCH[1]}"
+    # Strip filename to the bucket directory using glob match so BASE isn’t interpreted as regex
+    local prefix="$BASE"/[0-9]*/.ocarina_hidden/laundry/[0-9]*
+    if [[ "$path" == "$prefix"/* || "$path" == "$prefix" ]]; then
+        # Remove trailing /file portion if present
+        echo "${path%%/*}"
+    fi
 }
 
 sample_counts() {
@@ -149,11 +150,7 @@ sample_counts() {
             counts["$bucket"]=$((counts["$bucket"] + 1))
         fi
     done < <(
-        find "$BASE" \
-            -regextype posix-extended \
-            -type f \
-            -regex "$BASE/[0-9]+/\\.ocarina_hidden/laundry/[0-9]+/.+" \
-            2>/dev/null
+        find "$BASE" -type f -path "$BASE"/[0-9]*/.ocarina_hidden/laundry/[0-9]*/* 2>/dev/null
     )
 }
 

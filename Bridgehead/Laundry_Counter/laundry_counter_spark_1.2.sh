@@ -21,6 +21,8 @@ color_bold=$(tput bold 2>/dev/null || echo "")
 color_yellow=$(tput setaf 3 2>/dev/null || echo "")
 color_magenta=$(tput setaf 5 2>/dev/null || echo "")
 color_cyan=$(tput setaf 6 2>/dev/null || echo "")
+hide_cursor() { tput civis 2>/dev/null || true; }
+show_cursor() { tput cnorm 2>/dev/null || true; }
 
 detect_base() {
     BASE="$BASE_DEFAULT"
@@ -114,17 +116,30 @@ spark_line() {
 }
 
 scan_buckets() {
-    find "$BASE" \
-        -regextype posix-extended \
-        -type d \
-        -regex "$BASE/[0-9]+/\\.ocarina_hidden/laundry/[0-9]+" \
-        2>/dev/null | sort
+    # Use shell globbing to pick only bucket roots (BASE/<int>/.ocarina_hidden/laundry/<int>)
+    local bucket_glob="${BASE%/}"/[0-9]*/.ocarina_hidden/laundry/[0-9]*
+    local buckets=()
+    shopt -s nullglob
+    for d in $bucket_glob; do
+        [[ -d "$d" ]] && buckets+=("$d")
+    done
+    shopt -u nullglob
+    printf '%s\n' "${buckets[@]}" | sort
 }
 
 bucket_dir_for() {
     local path="$1"
-    local re="^(${BASE}/[0-9]+/\\.ocarina_hidden/laundry/[0-9]+)"
-    [[ "$path" =~ $re ]] && echo "${BASH_REMATCH[1]}"
+    # Walk up until we hit the bucket root (BASE/<int>/.ocarina_hidden/laundry/<int>)
+    local dir="$path"
+    while [[ -n "$dir" && "$dir" != "/" ]]; do
+        case "$dir" in
+            "$BASE"/[0-9]*/.ocarina_hidden/laundry/[0-9]*)
+                echo "$dir"
+                return
+                ;;
+        esac
+        dir="${dir%/*}"
+    done
 }
 
 sample_counts() {
@@ -140,21 +155,16 @@ sample_counts() {
         counts["$dir"]=0
     done < <(scan_buckets)
 
-    while IFS= read -r path; do
-        [[ -z "$path" ]] && continue
-        local bucket
-        bucket=$(bucket_dir_for "$path")
-        [[ -z "$bucket" ]] && continue
-        if [[ -v counts["$bucket"] ]]; then
-            counts["$bucket"]=$((counts["$bucket"] + 1))
+    # Count files per bucket directly (GNU find for speed; fallback to wc -l if needed)
+    for b in "${!counts[@]}"; do
+        local cnt
+        cnt=$(find "$b" -type f -printf '.' 2>/dev/null | wc -c || true)
+        # If -printf is unsupported (non-GNU), fallback to line count
+        if [[ -z "$cnt" || "$cnt" == "0" && -n "$(find "$b" -type f -print -quit 2>/dev/null)" ]]; then
+            cnt=$(find "$b" -type f -print 2>/dev/null | wc -l || true)
         fi
-    done < <(
-        find "$BASE" \
-            -regextype posix-extended \
-            -type f \
-            -regex "$BASE/[0-9]+/\\.ocarina_hidden/laundry/[0-9]+/.+" \
-            2>/dev/null
-    )
+        counts["$b"]=$((cnt))
+    done
 }
 
 update_spark() {
@@ -184,15 +194,21 @@ update_spark() {
 }
 
 render() {
-    clear
-    echo "Laundry Bucket Monitor (sparkline sampling)"
-    echo "Base: $BASE"
-    echo "Sample interval: ${SAMPLE_INTERVAL}s"
-    echo "Updated: $(date)"
-    echo "--------------------------------------"
+    # Build output in memory and write once to minimize flicker
+    local buffer="" line
+    append() { buffer+="$1"$'\n'; }
+
+    append "Laundry Bucket Monitor (sparkline sampling)"
+    append "Base: $BASE"
+    append "Sample interval: ${SAMPLE_INTERVAL}s"
+    append "Updated: $(date)"
+    append "--------------------------------------"
 
     if ((${#counts[@]} == 0)); then
-        echo "(no buckets found under $BASE)"
+        append "(no buckets found under $BASE)"
+        printf '\033[H'
+        printf '%s' "$buffer"
+        printf '\033[J'
         return
     fi
 
@@ -241,18 +257,26 @@ render() {
             delta_str="${color_dim}+0${color_reset}"
         fi
 
-        printf "%-30s %-55s %7d %7s\n" "$spark_str" "$b" "$cur" "$delta_str"
+        printf -v line "%-30s %-55s %7d %7s" "$spark_str" "$b" "$cur" "$delta_str"
+        append "$line"
     done
-    echo "--------------------------------------"
-    printf "Pending files: %d    Added: %s%d%s    Removed: %s%d%s\n" \
+    append "--------------------------------------"
+    printf -v line "Pending files: %d    Added: %s%d%s    Removed: %s%d%s" \
         "$grand" \
         "$color_green" "$total_added" "$color_reset" \
         "$color_red" "$total_removed" "$color_reset"
+    append "$line"
+
+    # Clear first to avoid leftover characters when lines shrink, then render buffer
+    printf '\033[H\033[J'
+    printf '%s' "$buffer"
     initialized=1
 }
 
 main() {
-    trap 'exit 0' INT TERM
+    trap 'show_cursor; exit 0' INT TERM
+    trap 'show_cursor' EXIT
+    hide_cursor
     start_spinner "Starting..."
     sample_counts
     stop_spinner

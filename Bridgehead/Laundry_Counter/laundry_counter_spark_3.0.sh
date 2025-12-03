@@ -11,6 +11,10 @@ BASE_DEFAULT="/QSdata/ocaroot"
 
 SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-2}"   # seconds between samples
 SPARK_POINTS="${SPARK_POINTS:-30}"        # samples to keep per bucket
+RESYNC_INTERVAL="${RESYNC_INTERVAL:-30}"  # inotify mode: full rescan cadence (sec)
+INOTIFY_MODE=0
+INOTIFY_PID=0
+LAST_RESYNC=0
 
 # Colors (best effort)
 color_reset=$(tput sgr0 2>/dev/null || echo "")
@@ -21,6 +25,8 @@ color_bold=$(tput bold 2>/dev/null || echo "")
 color_yellow=$(tput setaf 3 2>/dev/null || echo "")
 color_magenta=$(tput setaf 5 2>/dev/null || echo "")
 color_cyan=$(tput setaf 6 2>/dev/null || echo "")
+hide_cursor() { tput civis 2>/dev/null || true; }
+show_cursor() { tput cnorm 2>/dev/null || true; }
 
 detect_base() {
     BASE="$BASE_DEFAULT"
@@ -39,6 +45,23 @@ detect_base() {
     fi
 }
 
+parse_args() {
+    while (($#)); do
+        case "$1" in
+            --inotify) INOTIFY_MODE=1 ;;
+            -h|--help)
+                cat <<'EOF'
+Usage: laundry_counter_spark_3.0.sh [--inotify]
+  --inotify    Use inotifywait for event-driven updates (requires inotify-tools)
+EOF
+                exit 0
+                ;;
+        esac
+        shift
+    done
+}
+
+parse_args "$@"
 detect_base
 
 declare -A counts
@@ -114,17 +137,42 @@ spark_line() {
 }
 
 scan_buckets() {
-    find "$BASE" \
-        -regextype posix-extended \
-        -type d \
-        -regex "$BASE/[0-9]+/\\.ocarina_hidden/laundry/[0-9]+" \
-        2>/dev/null | sort
+    # Use shell globbing to pick only bucket roots (BASE/<int>/.ocarina_hidden/laundry/<int>)
+    local bucket_glob="${BASE%/}"/[0-9]*/.ocarina_hidden/laundry/[0-9]*
+    local buckets=()
+    shopt -s nullglob
+    for d in $bucket_glob; do
+        [[ -d "$d" ]] && buckets+=("$d")
+    done
+    shopt -u nullglob
+    printf '%s\n' "${buckets[@]}" | sort
 }
 
 bucket_dir_for() {
     local path="$1"
-    local re="^(${BASE}/[0-9]+/\\.ocarina_hidden/laundry/[0-9]+)"
-    [[ "$path" =~ $re ]] && echo "${BASH_REMATCH[1]}"
+    # Walk up until we hit the bucket root (BASE/<int>/.ocarina_hidden/laundry/<int>)
+    local dir="$path"
+    while [[ -n "$dir" && "$dir" != "/" ]]; do
+        case "$dir" in
+            "$BASE"/[0-9]*/.ocarina_hidden/laundry/[0-9]*)
+                echo "$dir"
+                return
+                ;;
+        esac
+        dir="${dir%/*}"
+    done
+}
+
+init_bucket_if_needed() {
+    local bucket="$1"
+    if [[ ! -v counts["$bucket"] ]]; then
+        local cnt
+        cnt=$(find "$bucket" -type f -printf '.' 2>/dev/null | wc -c || true)
+        if [[ -z "$cnt" || "$cnt" == "0" && -n "$(find "$bucket" -type f -print -quit 2>/dev/null)" ]]; then
+            cnt=$(find "$bucket" -type f -print 2>/dev/null | wc -l || true)
+        fi
+        counts["$bucket"]=$((cnt))
+    fi
 }
 
 sample_counts() {
@@ -140,21 +188,49 @@ sample_counts() {
         counts["$dir"]=0
     done < <(scan_buckets)
 
-    while IFS= read -r path; do
-        [[ -z "$path" ]] && continue
-        local bucket
-        bucket=$(bucket_dir_for "$path")
-        [[ -z "$bucket" ]] && continue
-        if [[ -v counts["$bucket"] ]]; then
-            counts["$bucket"]=$((counts["$bucket"] + 1))
+    # Count files per bucket directly (GNU find for speed; fallback to wc -l if needed)
+    for b in "${!counts[@]}"; do
+        local cnt
+        cnt=$(find "$b" -type f -printf '.' 2>/dev/null | wc -c || true)
+        # If -printf is unsupported (non-GNU), fallback to line count
+        if [[ -z "$cnt" || "$cnt" == "0" && -n "$(find "$b" -type f -print -quit 2>/dev/null)" ]]; then
+            cnt=$(find "$b" -type f -print 2>/dev/null | wc -l || true)
         fi
-    done < <(
-        find "$BASE" \
-            -regextype posix-extended \
-            -type f \
-            -regex "$BASE/[0-9]+/\\.ocarina_hidden/laundry/[0-9]+/.+" \
-            2>/dev/null
-    )
+        counts["$b"]=$((cnt))
+    done
+}
+
+start_inotify_listener() {
+    if ! command -v inotifywait >/dev/null 2>&1; then
+        INOTIFY_MODE=0
+        echo "inotifywait not found; falling back to scan mode" >&2
+        return
+    fi
+    INOTIFY_MODE=1
+    {
+        inotifywait -m -r -e create -e delete -e moved_to -e moved_from --format '%e %w%f' "$BASE" 2>/dev/null |
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            local event path bucket
+            event=${line%% *}
+            path=${line#* }
+            [[ "$event" == *ISDIR* ]] && continue
+            bucket=$(bucket_dir_for "$path")
+            [[ -z "$bucket" ]] && continue
+            init_bucket_if_needed "$bucket"
+            case "$event" in
+                *CREATE*|*MOVED_TO*)
+                    counts["$bucket"]=$((counts["$bucket"] + 1))
+                    ;;
+                *DELETE*|*MOVED_FROM*)
+                    if [[ ${counts["$bucket"]:-0} -gt 0 ]]; then
+                        counts["$bucket"]=$((counts["$bucket"] - 1))
+                    fi
+                    ;;
+            esac
+        done
+    } &
+    INOTIFY_PID=$!
 }
 
 update_spark() {
@@ -184,15 +260,21 @@ update_spark() {
 }
 
 render() {
-    clear
-    echo "Laundry Bucket Monitor (sparkline sampling)"
-    echo "Base: $BASE"
-    echo "Sample interval: ${SAMPLE_INTERVAL}s"
-    echo "Updated: $(date)"
-    echo "--------------------------------------"
+    # Build output in memory and write once to minimize flicker
+    local buffer="" line
+    append() { buffer+="$1"$'\n'; }
+
+    append "Laundry Bucket Monitor (sparkline sampling)"
+    append "Mode: $([[ $INOTIFY_MODE -eq 1 ]] && echo INOTIFY || echo SCAN) | Sample interval: ${SAMPLE_INTERVAL}s$([[ $INOTIFY_MODE -eq 1 ]] && printf ' | Resync: %ss' \"$RESYNC_INTERVAL\")"
+    append "Base: $BASE"
+    append "Updated: $(date)"
+    append "--------------------------------------"
 
     if ((${#counts[@]} == 0)); then
-        echo "(no buckets found under $BASE)"
+        append "(no buckets found under $BASE)"
+        printf '\033[H'
+        printf '%s' "$buffer"
+        printf '\033[J'
         return
     fi
 
@@ -241,26 +323,59 @@ render() {
             delta_str="${color_dim}+0${color_reset}"
         fi
 
-        printf "%-30s %-55s %7d %7s\n" "$spark_str" "$b" "$cur" "$delta_str"
+        printf -v line "%-30s %-55s %7d %7s" "$spark_str" "$b" "$cur" "$delta_str"
+        append "$line"
     done
-    echo "--------------------------------------"
-    printf "Pending files: %d    Added: %s%d%s    Removed: %s%d%s\n" \
+    append "--------------------------------------"
+    printf -v line "Pending files: %d    Added: %s%d%s    Removed: %s%d%s" \
         "$grand" \
         "$color_green" "$total_added" "$color_reset" \
         "$color_red" "$total_removed" "$color_reset"
+    append "$line"
+
+    # Clear first to avoid leftover characters when lines shrink, then render buffer
+    printf '\033[H\033[J'
+    printf '%s' "$buffer"
     initialized=1
 }
 
 main() {
-    trap 'exit 0' INT TERM
+    trap '[[ $INOTIFY_PID -gt 0 ]] && kill "$INOTIFY_PID" 2>/dev/null; show_cursor; exit 0' INT TERM
+    trap '[[ $INOTIFY_PID -gt 0 ]] && kill "$INOTIFY_PID" 2>/dev/null; show_cursor' EXIT
+    hide_cursor
     start_spinner "Starting..."
     sample_counts
     stop_spinner
+    LAST_RESYNC=$(date +%s)
+    if ((INOTIFY_MODE)); then
+        start_inotify_listener
+    fi
     render
+    # Initialize prev_counts after first render so deltas start at 0
+    prev_counts=()
+    for b in "${!counts[@]}"; do
+        prev_counts["$b"]=${counts["$b"]}
+    done
     while true; do
         sleep "$SAMPLE_INTERVAL"
-        sample_counts
-        render
+        if ((INOTIFY_MODE)); then
+            if ((RESYNC_INTERVAL > 0)); then
+                local now
+                now=$(date +%s)
+                if ((now - LAST_RESYNC >= RESYNC_INTERVAL)); then
+                    sample_counts
+                    LAST_RESYNC=$now
+                fi
+            fi
+            render
+            prev_counts=()
+            for b in "${!counts[@]}"; do
+                prev_counts["$b"]=${counts["$b"]}
+            done
+        else
+            sample_counts
+            render
+        fi
     done
 }
 
